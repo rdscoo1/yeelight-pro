@@ -5,12 +5,32 @@ from homeassistant.core import callback
 from homeassistant.const import CONF_HOST
 
 from . import get_gateway_from_config, init_integration_data
-from .core.const import *
+from .core.const import (
+    DOMAIN,
+    DEFAULT_NAME,
+    CONF_PID,
+    CONF_KEEPALIVE,
+    PID_GATEWAY,
+    GATEWAY_TYPES,
+    DEFAULT_KEEPALIVE,
+    MIN_KEEPALIVE,
+    MAX_KEEPALIVE,
+)
 
 
 def get_flow_schema(defaults: dict):
     return {
         vol.Required(CONF_HOST, default=defaults.get(CONF_HOST, '')): str,
+    }
+
+
+def get_options_schema(defaults: dict):
+    return {
+        vol.Required(CONF_HOST, default=defaults.get(CONF_HOST, '')): str,
+        vol.Optional(
+            CONF_KEEPALIVE,
+            default=defaults.get(CONF_KEEPALIVE, DEFAULT_KEEPALIVE)
+        ): vol.All(vol.Coerce(int), vol.Range(min=MIN_KEEPALIVE, max=MAX_KEEPALIVE)),
     }
 
 
@@ -66,9 +86,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     self.context['last_error'] = str(err)
                 else:
                     self.hass.config_entries.async_update_entry(
-                        config_entry, data={**config_entry.data, **user_input}
+                        config_entry, data={**config_entry.data, CONF_HOST: user_input[CONF_HOST]}
                     )
-                    return self.async_create_entry(title='', data={})
+                    options = {CONF_KEEPALIVE: user_input.get(CONF_KEEPALIVE, DEFAULT_KEEPALIVE)}
+                    return self.async_create_entry(title='', data=options)
             errors['base'] = 'cannot_access'
         user_input = {
             **config_entry.data,
@@ -77,6 +98,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         }
         return self.async_show_form(
             step_id='init',
-            data_schema=vol.Schema(get_flow_schema(user_input)),
-            description_placeholders={'tip': self.context.pop('last_error', '')},
+            data_schema=vol.Schema(get_options_schema(user_input)),
+            errors=errors,
+            description_placeholders={
+                'tip': self.context.pop('last_error', ''),
+            },
         )
