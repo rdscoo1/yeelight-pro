@@ -1,5 +1,23 @@
 # Release Notes
 
+## [0.7.1] - 2026-01-28
+
+### 🐛 Bug Fix
+
+- **Fixed gateway firmware version always showing "unknown"**
+  - Gateway node (id=0, nt=GATEWAY) is now properly processed in topology updates
+  - Gateway properties including firmware version (`fv`) are now correctly extracted
+  - Firmware update entity displays actual version from the gateway
+
+**Technical Details:**
+- Added handling for `NodeType.GATEWAY` in `XDevice.from_node()`
+- Gateway device properties are now updated when topology is received
+- Calls `prop_changed()` to trigger entity updates
+
+**Full Changelog**: [0.7.0...0.7.1](https://github.com/rdscoo1/yeelight-pro/compare/0.7.0...0.7.1)
+
+---
+
 ## [0.7.0] - 2026-01-28
 
 ### ✨ Major Feature Release

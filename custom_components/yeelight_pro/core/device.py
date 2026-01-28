@@ -103,13 +103,31 @@ class XDevice:
 
     @staticmethod
     async def from_node(gateway: "ProGateway", node: dict):
-        if node.get('nt') not in [NodeType.MESH, NodeType.GROUP, NodeType.MRSH_GROUP, NodeType.SCENE]:
-            return None
         if not (nid := node.get('id')):
+            return None
+        
+        # Handle gateway node (id=0, nt=GATEWAY) to update firmware version
+        if node.get('nt') == NodeType.GATEWAY:
+            if gateway.device and isinstance(gateway.device, GatewayDevice):
+                # Update gateway device properties from topology
+                if 'prop' in node:
+                    gateway.device.prop.update(node['prop'])
+                if 'n' in node:
+                    gateway.device.name = node['n']
+                _LOGGER.debug('[%s] Gateway node updated: fv=%s', 
+                             gateway.host, gateway.device.firmware_version)
+                # Trigger entity updates
+                await gateway.device.prop_changed(node)
+            return gateway.device
+        
+        if node.get('nt') not in [NodeType.MESH, NodeType.GROUP, NodeType.MRSH_GROUP, NodeType.SCENE]:
             return None
         if dvc := gateway.devices.get(nid):
             if n := node.get('n'):
                 dvc.name = n
+            # Update device properties from topology
+            if 'prop' in node:
+                dvc.prop.update(node['prop'])
         else:
             dvc = XDevice(node)
             if dvc.nt in [NodeType.SCENE]:
