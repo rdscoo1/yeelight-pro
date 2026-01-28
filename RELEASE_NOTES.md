@@ -1,48 +1,50 @@
-# Release Notes - v0.5.0
+# Release Notes
 
-## 🎯 Backward-Compatible Migration System
+## [0.5.0] - 2026-01-28
+
+### 🎯 Backward-Compatible Migration System
 
 This release implements a robust migration strategy that allows seamless transition from older integration versions to your fork, with full rollback support.
 
-## ✨ What's New
+### ✨ What's New
 
-### Dual Device Identifiers
+#### Dual Device Identifiers
 - Devices now have **both old and new identifiers** in the device registry
 - Home Assistant matches by the old identifier but also registers the new one
 - Prevents device loss during migration
 - Format: `{device.id}` (old) + `{gateway_host}-{device.id}` (new)
 
-### Smart Unique ID Selection
+#### Smart Unique ID Selection
 - Entities check the registry for existing `unique_id` before creation
 - If old format exists → reuse it (prevents duplicates)
 - If not → use new format
 - No manual intervention required
 
-### Improved Stability
+#### Improved Stability
 - Gateway **host** is now preferred over `entry_id`
 - Better stability across Home Assistant reinstalls
 - Consistent identifiers even if config entries change
 
-## 🔄 Migration Behavior
+### 🔄 Migration Behavior
 
-### For Existing Users
+#### For Existing Users
 ✅ All devices and entities preserved automatically  
 ✅ No need to re-add devices  
 ✅ No entity duplicates  
 ✅ Seamless upgrade experience  
 
-### For New Users
+#### For New Users
 ✅ Clean installation with new identifier format  
 ✅ No migration overhead  
 
-### Rollback Support
+#### Rollback Support
 ✅ Can safely revert to older versions  
 ✅ Old identifiers remain in registry  
 ✅ Devices won't be lost  
 
-## 🔧 Technical Implementation
+### 🔧 Technical Implementation
 
-### Device Info Changes
+#### Device Info Changes
 ```python
 # Before (0.4.0)
 DeviceInfo(
@@ -60,7 +62,7 @@ DeviceInfo(
 )
 ```
 
-### Entity Unique ID Logic
+#### Entity Unique ID Logic
 ```python
 # Check registry for existing entity
 old_uid = f"{device.id}-{attr}"
@@ -70,44 +72,79 @@ existing = registry.get_entity_id(domain, DOMAIN, old_uid)
 unique_id = old_uid if existing else new_uid
 ```
 
-## 📊 Test Coverage
+### 📊 Test Coverage
 
 ✅ **104 tests passing**  
 ✅ All entity types tested  
 ✅ Migration logic verified  
 ✅ No regressions  
 
-## 📝 Upgrade Instructions
+### 📝 Upgrade Instructions
 
-### From v0.4.0 or Earlier
+#### From v0.4.0 or Earlier
 
 1. **Backup your Home Assistant** (recommended)
 2. Update the integration via HACS or manually
 3. Restart Home Assistant
 4. **That's it!** All devices and entities will work automatically
 
-### If Issues Occur
+#### If Issues Occur
 
 1. Check logs: `Settings → System → Logs` (filter by `yeelight_pro`)
 2. If needed, revert to previous version
 3. Report issue with logs on GitHub
 
-## 🐛 Bug Fixes
+### 🐛 Bug Fixes
 
 - Fixed test compatibility with registry access
 - Improved error handling in entity initialization
 - Better handling of missing gateway references
 
-## 📚 Documentation
+### 📚 Documentation
 
 - Added comprehensive CHANGELOG.md
 - Updated migration notes
 - Improved code comments
 
-## 🙏 Credits
+### 🙏 Credits
 
 Migration strategy inspired by Home Assistant best practices for integration forks.
 
+**Full Changelog**: [v0.4.0...v0.5.0](https://github.com/rdscoo1/yeelight-pro/compare/v0.4.0...v0.5.0)
+
 ---
 
-**Full Changelog**: [v0.4.0...v0.5.0](https://github.com/rdscoo1/yeelight-pro/compare/v0.4.0...v0.5.0)
+## [0.4.0] - Previous Release
+
+- Various improvements and bug fixes
+- Enhanced stability and diagnostics
+- Comprehensive test coverage (100+ tests)
+
+---
+
+## How to Add New Release Notes
+
+When creating a new release, add a new section at the top following this format:
+
+```markdown
+## [X.Y.Z] - YYYY-MM-DD
+
+### 🎯 Main Feature/Theme
+
+Brief description of the release focus.
+
+### ✨ What's New
+- Feature 1
+- Feature 2
+
+### 🐛 Bug Fixes
+- Fix 1
+- Fix 2
+
+### 📚 Documentation
+- Doc update 1
+
+**Full Changelog**: [vX.Y.Z-1...vX.Y.Z](link)
+
+---
+```
