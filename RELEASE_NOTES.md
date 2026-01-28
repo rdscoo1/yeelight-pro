@@ -1,5 +1,16 @@
 # Release Notes
 
+## [0.5.1] - 2026-01-28
+
+### 🛠️ Release Maintenance
+
+- Retagged the 0.5.0 release without the `v` prefix
+- No code changes compared to 0.5.0
+
+**Full Changelog**: [0.5.0...0.5.1](https://github.com/rdscoo1/yeelight-pro/compare/0.5.0...0.5.1)
+
+---
+
 ## [0.5.0] - 2026-01-28
 
 ### 🎯 Backward-Compatible Migration System
