@@ -338,6 +338,8 @@ class GatewayDevice(XDevice):
         self.id = gateway.host
         self.name = 'Yeelight Pro'
         self._gateway_ref = gateway
+        # Re-setup converters after changing id
+        self.setup_converters()
 
     def setup_converters(self):
         super().setup_converters()

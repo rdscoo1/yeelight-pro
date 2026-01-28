@@ -379,7 +379,8 @@ class XEntity(Entity):
 
         via_device = None
         if not isinstance(device, (GatewayDevice, WifiPanelDevice)):
-            via_device = (DOMAIN, f"{host_or_entry}-{device.gateway.device.id}")
+            # Use gateway host as via_device identifier to ensure it exists in registry
+            via_device = (DOMAIN, f"{host_or_entry}-{device.gateway.host}")
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{host_or_entry}-{device.id}")},

@@ -12,7 +12,6 @@ from homeassistant.components.light import (
     ColorMode,
     LightEntityFeature,
     ATTR_BRIGHTNESS,
-    ATTR_COLOR_TEMP,
     ATTR_COLOR_TEMP_KELVIN,
     ATTR_RGB_COLOR,
     ATTR_TRANSITION,
@@ -43,8 +42,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     platform.async_register_entity_service(
         "prestage_color_temp",
         vol.Schema({
-            vol.Exclusive(ATTR_COLOR_TEMP_KELVIN, "ct"): vol.Coerce(int),
-            vol.Exclusive(ATTR_COLOR_TEMP, "ct"): vol.Coerce(int),
+            vol.Required(ATTR_COLOR_TEMP_KELVIN): vol.Coerce(int),
         }),
         "async_prestage_color_temp",
     )
@@ -56,8 +54,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     platform.async_register_entity_service(
         "prestage_color_temp",
         vol.Schema({
-            vol.Exclusive(ATTR_COLOR_TEMP_KELVIN, "ct"): vol.Coerce(int),
-            vol.Exclusive(ATTR_COLOR_TEMP, "ct"): vol.Coerce(int),
+            vol.Required(ATTR_COLOR_TEMP_KELVIN): vol.Coerce(int),
         }),
         "async_prestage_color_temp",
     )
@@ -78,7 +75,7 @@ class XLightEntity(XEntity, LightEntity):
         if device.converters.get(ATTR_RGB_COLOR):
             self._attr_supported_color_modes.add(ColorMode.RGB)
 
-        if cov := device.converters.get(ATTR_COLOR_TEMP):
+        if cov := device.converters.get('color_temp'):
             self._attr_supported_color_modes.add(ColorMode.COLOR_TEMP)
             if hasattr(cov, "minm") and hasattr(cov, "maxm"):
                 self._attr_min_mireds = cov.minm
@@ -128,7 +125,6 @@ class XLightEntity(XEntity, LightEntity):
             watched = {
                 self._name,
                 ATTR_BRIGHTNESS,
-                ATTR_COLOR_TEMP,
                 ATTR_COLOR_TEMP_KELVIN,
                 ATTR_RGB_COLOR,
             }
@@ -153,10 +149,10 @@ class XLightEntity(XEntity, LightEntity):
             self._attr_is_on = data[self._name]
         if ATTR_BRIGHTNESS in data:
             self._attr_brightness = data[ATTR_BRIGHTNESS]
-        if ATTR_COLOR_TEMP in data:
-            self._attr_color_temp = data[ATTR_COLOR_TEMP]
         if ATTR_COLOR_TEMP_KELVIN in data:
             self._attr_color_temp_kelvin = data[ATTR_COLOR_TEMP_KELVIN]
+            # Also update mired for backward compatibility
+            self._attr_color_temp = int(1_000_000 / max(1, data[ATTR_COLOR_TEMP_KELVIN]))
         if ATTR_RGB_COLOR in data:
             self._attr_rgb_color = data[ATTR_RGB_COLOR]
 
@@ -169,7 +165,7 @@ class XLightEntity(XEntity, LightEntity):
         }
         if ATTR_RGB_COLOR in kwargs:
             self._attr_color_mode = ColorMode.RGB
-        elif ATTR_COLOR_TEMP in kwargs or ATTR_COLOR_TEMP_KELVIN in kwargs:
+        elif ATTR_COLOR_TEMP_KELVIN in kwargs:
             self._attr_color_mode = ColorMode.COLOR_TEMP
         else:
             self._attr_color_mode = None
@@ -192,7 +188,7 @@ class XLightEntity(XEntity, LightEntity):
         """
         Set color temperature while the light is OFF (no power change).
 
-        Accepts ATTR_COLOR_TEMP_KELVIN or ATTR_COLOR_TEMP (mired).
+        Accepts ATTR_COLOR_TEMP_KELVIN.
         """
         payload: dict = {}
 
@@ -201,16 +197,6 @@ class XLightEntity(XEntity, LightEntity):
             payload["color_temp"] = k
             self._attr_color_temp_kelvin = k
             self._attr_color_temp = int(1_000_000 / max(1, k))
-            self._attr_color_mode = ColorMode.COLOR_TEMP
-
-        elif ATTR_COLOR_TEMP in kwargs:
-            mired = self._clamp_mired(int(kwargs[ATTR_COLOR_TEMP]))
-            k = int(1_000_000 / max(1, mired))
-            k = self._clamp_ct_kelvin(k)  # keep both in sync if bounds exist
-            payload["color_temp"] = k
-            # recompute after clamp
-            self._attr_color_temp = int(1_000_000 / max(1, k))
-            self._attr_color_temp_kelvin = k
             self._attr_color_mode = ColorMode.COLOR_TEMP
 
         if not payload:
