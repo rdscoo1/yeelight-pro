@@ -4,6 +4,7 @@ import asyncio
 import time
 import voluptuous as vol
 
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import async_get_current_platform
 from homeassistant.core import callback
 from homeassistant.components.light import (
@@ -41,9 +42,10 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     platform = async_get_current_platform()
     platform.async_register_entity_service(
         "prestage_color_temp",
-        vol.Schema({
+        {
             vol.Required(ATTR_COLOR_TEMP_KELVIN): vol.Coerce(int),
-        }),
+            **cv.ENTITY_SERVICE_FIELDS,
+        },
         "async_prestage_color_temp",
     )
 
@@ -53,9 +55,10 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     platform = async_get_current_platform()
     platform.async_register_entity_service(
         "prestage_color_temp",
-        vol.Schema({
+        {
             vol.Required(ATTR_COLOR_TEMP_KELVIN): vol.Coerce(int),
-        }),
+            **cv.ENTITY_SERVICE_FIELDS,
+        },
         "async_prestage_color_temp",
     )
 
@@ -95,6 +98,16 @@ class XLightEntity(XEntity, LightEntity):
 
         if device.converters.get(ATTR_TRANSITION):
             self._attr_supported_features |= LightEntityFeature.TRANSITION
+
+        # Initialize color_mode to prevent warnings
+        if ColorMode.RGB in self._attr_supported_color_modes:
+            self._attr_color_mode = ColorMode.RGB
+        elif ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
+            self._attr_color_mode = ColorMode.COLOR_TEMP
+        elif ColorMode.BRIGHTNESS in self._attr_supported_color_modes:
+            self._attr_color_mode = ColorMode.BRIGHTNESS
+        else:
+            self._attr_color_mode = ColorMode.ONOFF
 
         self._target_attrs = {}
 
@@ -167,8 +180,16 @@ class XLightEntity(XEntity, LightEntity):
             self._attr_color_mode = ColorMode.RGB
         elif ATTR_COLOR_TEMP_KELVIN in kwargs:
             self._attr_color_mode = ColorMode.COLOR_TEMP
-        else:
-            self._attr_color_mode = None
+        elif not self._attr_color_mode:
+            # Set default color mode based on supported modes
+            if ColorMode.RGB in self._attr_supported_color_modes:
+                self._attr_color_mode = ColorMode.RGB
+            elif ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
+                self._attr_color_mode = ColorMode.COLOR_TEMP
+            elif ColorMode.BRIGHTNESS in self._attr_supported_color_modes:
+                self._attr_color_mode = ColorMode.BRIGHTNESS
+            else:
+                self._attr_color_mode = ColorMode.ONOFF
         return await self.async_turn(kwargs[self._name], **kwargs)
 
     async def async_turn_off(self, **kwargs):

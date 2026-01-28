@@ -1,5 +1,26 @@
 # Release Notes
 
+## [0.5.3] - 2026-01-28
+
+### 🐛 Bug Fixes
+
+- **Fixed entity service schema error** for `prestage_color_temp` service
+  - Added proper `ENTITY_SERVICE_FIELDS` to service schema
+  - Resolves: "The yeelight_pro.prestage_color_temp service registers an entity service with a non entity service schema"
+
+- **Fixed missing color_mode reporting** in light entities
+  - All light entities now properly report their color mode
+  - Ensures compatibility with Home Assistant Core 2025.3
+  - Color mode is initialized based on supported features (RGB → COLOR_TEMP → BRIGHTNESS → ONOFF)
+
+- **Updated repository URLs**
+  - Documentation and issue tracker now point to `rdscoo1/yeelight-pro`
+  - Bug reports will be directed to the correct repository
+
+**Full Changelog**: [0.5.2...0.5.3](https://github.com/rdscoo1/yeelight-pro/compare/0.5.2...0.5.3)
+
+---
+
 ## [0.5.2] - 2026-01-28
 
 ### 🛠️ Maintenance

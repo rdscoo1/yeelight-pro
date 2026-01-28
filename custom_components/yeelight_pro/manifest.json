@@ -6,14 +6,14 @@
     "@hasscc"
   ],
   "config_flow": true,
-  "documentation": "https://github.com/hasscc/yeelight-pro",
+  "documentation": "https://github.com/rdscoo1/yeelight-pro",
   "integration_type": "hub",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/hasscc/yeelight-pro/issues",
+  "issue_tracker": "https://github.com/rdscoo1/yeelight-pro/issues",
   "loggers": [
     "custom_components.yeelight_pro",
     "custom_components.yeelight_pro.core"
   ],
   "requirements": [],
-  "version": "0.5.2"
+  "version": "0.5.3"
 }
