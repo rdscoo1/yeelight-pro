@@ -1,5 +1,18 @@
 # Release Notes
 
+## [0.6.1] - 2026-01-28
+
+### 🐛 Bug Fixes
+
+- **Fixed AttributeError in debug logging**
+  - Gateway device creation now safely handles missing attributes (model, pid, firmware_version)
+  - Prevents crash when adding GatewayDevice or devices without all attributes
+  - Uses `getattr()` with default `None` for safe attribute access
+
+**Full Changelog**: [0.6.0...0.6.1](https://github.com/rdscoo1/yeelight-pro/compare/0.6.0...0.6.1)
+
+---
+
 ## [0.6.0] - 2026-01-28
 
 ### ✨ New Features
