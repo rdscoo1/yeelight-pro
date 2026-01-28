@@ -1,5 +1,18 @@
 # Release Notes
 
+## [0.5.4] - 2026-01-28
+
+### 🐛 Bug Fixes
+
+- **Fixed color_mode persistence during state updates**
+  - Color mode is now properly maintained when device state changes
+  - Added fallback logic to ensure color_mode is always set
+  - Resolves remaining "does not report a color mode" warnings
+
+**Full Changelog**: [0.5.3...0.5.4](https://github.com/rdscoo1/yeelight-pro/compare/0.5.3...0.5.4)
+
+---
+
 ## [0.5.3] - 2026-01-28
 
 ### 🐛 Bug Fixes

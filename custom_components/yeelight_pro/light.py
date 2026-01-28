@@ -166,8 +166,25 @@ class XLightEntity(XEntity, LightEntity):
             self._attr_color_temp_kelvin = data[ATTR_COLOR_TEMP_KELVIN]
             # Also update mired for backward compatibility
             self._attr_color_temp = int(1_000_000 / max(1, data[ATTR_COLOR_TEMP_KELVIN]))
+            # Update color mode when color temp changes
+            if ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
+                self._attr_color_mode = ColorMode.COLOR_TEMP
         if ATTR_RGB_COLOR in data:
             self._attr_rgb_color = data[ATTR_RGB_COLOR]
+            # Update color mode when RGB changes
+            if ColorMode.RGB in self._attr_supported_color_modes:
+                self._attr_color_mode = ColorMode.RGB
+        
+        # Ensure color_mode is always set
+        if not self._attr_color_mode:
+            if ColorMode.RGB in self._attr_supported_color_modes:
+                self._attr_color_mode = ColorMode.RGB
+            elif ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
+                self._attr_color_mode = ColorMode.COLOR_TEMP
+            elif ColorMode.BRIGHTNESS in self._attr_supported_color_modes:
+                self._attr_color_mode = ColorMode.BRIGHTNESS
+            else:
+                self._attr_color_mode = ColorMode.ONOFF
 
     async def async_turn_on(self, **kwargs):
         """Turn the entity on."""
