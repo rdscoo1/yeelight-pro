@@ -83,6 +83,15 @@ class ProGateway:
             self.devices[device.id] = device
             self.log.info('[%s] Device added: id=%s, name=%s, type=%s', 
                          self.host, device.id, device.name, device.type)
+            self.log.debug('[%s] Device details: %s', self.host, json.dumps({
+                'id': device.id,
+                'name': device.name,
+                'type': device.type,
+                'model': device.model,
+                'pid': device.pid,
+                'firmware': device.firmware_version,
+                'properties': device.prop
+            }, ensure_ascii=False, default=str))
         if self not in device.gateways:
             device.gateways.append(self)
 
@@ -322,8 +331,11 @@ class ProGateway:
 
         if ack := self._msgs.get(cid):
             ack.set_result(dat)
+            self.log.debug('[%s] Response received: method=%s, id=%s, data=%s', 
+                          self.host, cmd, cid, json.dumps(dat, ensure_ascii=False, default=str))
         else:
             self.log.debug('[%s] Message: method=%s, nodes=%d', self.host, cmd, len(nodes))
+            self.log.debug('[%s] Message data: %s', self.host, json.dumps(dat, ensure_ascii=False, default=str))
 
         is_topology = cmd in ("gateway_post.topology", "device_post.topology")
 
@@ -332,6 +344,11 @@ class ProGateway:
                 self.device = WifiPanelDevice(nodes[0])
             else:
                 self.device = GatewayDevice(self)
+            self.log.debug('[%s] Gateway device created: %s', self.host, json.dumps({
+                'id': self.device.id,
+                'type': type(self.device).__name__,
+                'pid': self.pid
+            }, ensure_ascii=False, default=str))
             await self.add_device(self.device)
 
         if not nodes and "params" in dat:
@@ -339,6 +356,8 @@ class ProGateway:
 
         # Track devices in topology for stale device detection
         if is_topology:
+            self.log.debug('[%s] Topology update: %d nodes', self.host, len(nodes))
+            self.log.debug('[%s] Topology nodes: %s', self.host, json.dumps(nodes, ensure_ascii=False, default=str))
             current_topology_devices: Set[Union[str, int]] = set()
             for node in nodes:
                 if nid := node.get("id"):
@@ -371,8 +390,12 @@ class ProGateway:
                 continue
 
             if cmd in ("gateway_post.prop", "device_post.prop"):
+                self.log.debug('[%s] Property change for device %s: %s', 
+                              self.host, nid, json.dumps(node.get('prop', {}), ensure_ascii=False, default=str))
                 await dvc.prop_changed(node)
             elif cmd in ("gateway_post.event", "device_post.event"):
+                self.log.debug('[%s] Event fired for device %s: %s', 
+                              self.host, nid, json.dumps(node.get('event', {}), ensure_ascii=False, default=str))
                 await dvc.event_fired(node)
 
     async def send(self, method: str, wait_result: bool = True, **kwargs: Any) -> Optional[Dict]:
@@ -398,6 +421,7 @@ class ProGateway:
             **kwargs,
         }
         self.log.debug('[%s] Send: %s', self.host, method)
+        self.log.debug('[%s] Send data: %s', self.host, json.dumps(dat, ensure_ascii=False, default=str))
         
         try:
             self.writer.write(json.dumps(dat).encode() + MSG_SPLIT)

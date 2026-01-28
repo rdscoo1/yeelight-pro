@@ -1,5 +1,40 @@
 # Release Notes
 
+## [0.6.0] - 2026-01-28
+
+### ✨ New Features
+
+- **Enhanced Debug Logging**
+  - Added comprehensive JSON-formatted debug logging throughout the integration
+  - **Gateway logging** (`core/gateway.py`):
+    - Device discovery with full device details (id, name, type, model, pid, firmware, properties)
+    - Topology updates with complete node data
+    - All incoming/outgoing messages with full JSON payloads
+    - Property changes and events with detailed data
+  - **Entity logging** (`__init__.py`):
+    - Entity creation with device info and unique_id details
+    - State updates with old/new value comparisons
+    - Attribute changes with full data
+    - Property encoding and sending with payloads
+  - **Light logging** (`light.py`):
+    - Turn on/off operations with all parameters
+    - Color mode changes (RGB, COLOR_TEMP, BRIGHTNESS, ONOFF)
+    - Brightness and color temperature adjustments
+    - Prestage operations
+  
+  Enable debug logging in Home Assistant configuration:
+  ```yaml
+  logger:
+    default: info
+    logs:
+      custom_components.yeelight_pro: debug
+      custom_components.yeelight_pro.core: debug
+  ```
+
+**Full Changelog**: [0.5.4...0.6.0](https://github.com/rdscoo1/yeelight-pro/compare/0.5.4...0.6.0)
+
+---
+
 ## [0.5.4] - 2026-01-28
 
 ### 🐛 Bug Fixes

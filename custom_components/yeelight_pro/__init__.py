@@ -367,6 +367,9 @@ class XEntity(Entity):
         self._attr_available = device.online if device.online is not None else True
         self._attr_name = f'{device.name} {conv.attr}'.strip()
         
+        _LOGGER.debug('Creating entity: device_id=%s, device_name=%s, converter=%s, domain=%s', 
+                     device.id, device.name, conv.attr, conv.domain)
+        
         # Prefer gateway host over entry_id for better stability across reinstalls
         gw_id = getattr(device.gateway, "host", "gw")
         
@@ -385,6 +388,9 @@ class XEntity(Entity):
         
         # Use old unique_id if it exists in registry, otherwise use new format
         self._attr_unique_id = old_uid if existing_entity else new_uid
+        
+        _LOGGER.debug('Entity unique_id: %s (old=%s, new=%s, exists=%s)', 
+                     self._attr_unique_id, old_uid, new_uid, bool(existing_entity))
         
         self._attr_has_entity_name = True
         self._attr_icon = self._option.get('icon')
@@ -416,14 +422,27 @@ class XEntity(Entity):
         self._vars = {}
         self.subscribed_attrs = device.subscribe_attrs(conv)
         device.entities[conv.attr] = self
+        
+        _LOGGER.debug('Entity initialized: %s, unique_id=%s, device_info=%s', 
+                     self._attr_name, self._attr_unique_id, 
+                     json.dumps({
+                         'identifiers': [list(i) for i in self._attr_device_info.get('identifiers', set())],
+                         'name': self._attr_device_info.get('name'),
+                         'model': self._attr_device_info.get('model'),
+                         'via_device': list(via_device) if via_device else None
+                     }, ensure_ascii=False, default=str))
 
     async def async_added_to_hass(self):
         # Migration logic is now handled in __init__ by checking existing registry entries
         # This ensures we use the old unique_id if it exists, avoiding duplicates
+        
+        _LOGGER.debug('Entity added to hass: %s (unique_id=%s)', self.entity_id, self.unique_id)
 
         if hasattr(self, 'async_get_last_state'):
             state = await self.async_get_last_state()
             if state:
+                _LOGGER.debug('Restoring last state for %s: state=%s, attributes=%s', 
+                             self.entity_id, state.state, json.dumps(state.attributes, ensure_ascii=False, default=str))
                 self.async_restore_last_state(state.state, state.attributes)
 
         self.added = True
@@ -437,18 +456,29 @@ class XEntity(Entity):
     @callback
     def async_set_state(self, data: dict):
         """Handle state update from gateway."""
+        _LOGGER.debug('%s: State update received: %s', self.entity_id, json.dumps(data, ensure_ascii=False, default=str))
+        
         if self._name in data:
+            old_state = getattr(self, '_attr_state', None)
             self._attr_state = data[self._name]
+            _LOGGER.debug('%s: State changed: %s -> %s', self.entity_id, old_state, self._attr_state)
         if 'available' in data:
+            old_available = self._attr_available
             self._attr_available = data['available']
+            _LOGGER.debug('%s: Availability changed: %s -> %s', self.entity_id, old_available, self._attr_available)
         for k in self.subscribed_attrs:
             if k not in data:
                 continue
             self._attr_extra_state_attributes[k] = data[k]
-        _LOGGER.debug('%s: State changed: %s', self.entity_id, data)
+            _LOGGER.debug('%s: Attribute %s = %s', self.entity_id, k, data[k])
 
     async def device_send_props(self, value: dict):
+        _LOGGER.debug('%s: Sending props: %s', self.entity_id, json.dumps(value, ensure_ascii=False, default=str))
         payload = self.device.encode(value)
+        _LOGGER.debug('%s: Encoded payload: %s', self.entity_id, json.dumps(payload, ensure_ascii=False, default=str))
         if not payload:
+            _LOGGER.warning('%s: Empty payload after encoding', self.entity_id)
             return False
-        return await self.device.set_prop(**payload)
+        result = await self.device.set_prop(**payload)
+        _LOGGER.debug('%s: Send result: %s', self.entity_id, result)
+        return result

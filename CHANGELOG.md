@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-01-28
+
+### Added
+- **Enhanced debug logging** across all components
+  - Gateway: JSON dumps of device details, topology, responses, and messages
+  - Entities: Detailed logging of entity creation, state updates, and property changes
+  - Lights: Comprehensive logging of turn on/off, color mode changes, and transitions
+  - All debug logs include JSON-formatted data for easy inspection
+
 ## [0.5.4] - 2026-01-28
 
 ### Fixed
