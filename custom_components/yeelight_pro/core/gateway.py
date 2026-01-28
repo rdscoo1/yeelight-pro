@@ -4,7 +4,9 @@ import asyncio
 import logging
 import random
 import json
-from typing import TYPE_CHECKING, Callable, Dict, Set, Union, Optional, Any
+import time
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Callable, Dict, Set, Union, Optional, Any, List
 
 from .const import PID_WIFI_PANEL, DOMAIN
 from .device import XDevice, GatewayDevice, WifiPanelDevice
@@ -24,6 +26,74 @@ RECONNECT_BACKOFF_FACTOR = 2.0
 # Error thresholds
 MAX_JSON_ERRORS = 5  # Reconnect after N consecutive JSON decode errors
 KEEPALIVE_INTERVAL = 30  # Seconds between keepalive pings
+
+# Retry settings
+DEFAULT_RETRIES = 3
+RETRY_DELAY_BASE = 0.5  # Base delay between retries (exponential backoff)
+
+# Topology cache settings
+TOPOLOGY_CACHE_TTL = 300  # 5 minutes
+
+# Command queue settings
+COMMAND_DEBOUNCE_DELAY = 0.1  # 100ms debounce for rapid commands
+
+
+@dataclass
+class CommandQueueItem:
+    """Item in the command queue."""
+    method: str
+    kwargs: Dict[str, Any]
+    future: asyncio.Future
+    retries: int = DEFAULT_RETRIES
+    device_id: Optional[Union[str, int]] = None
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass 
+class GatewayStatistics:
+    """Gateway statistics for diagnostics."""
+    start_time: float = field(default_factory=time.time)
+    messages_sent: int = 0
+    messages_received: int = 0
+    commands_success: int = 0
+    commands_failed: int = 0
+    commands_retried: int = 0
+    reconnect_count: int = 0
+    keepalive_count: int = 0
+    keepalive_success: int = 0
+    keepalive_failed: int = 0
+    last_message_time: float = 0
+    last_error: Optional[str] = None
+    last_error_time: float = 0
+    
+    @property
+    def uptime(self) -> float:
+        """Return uptime in seconds."""
+        return time.time() - self.start_time
+    
+    @property
+    def success_rate(self) -> float:
+        """Return command success rate as percentage."""
+        total = self.commands_success + self.commands_failed
+        return (self.commands_success / total * 100) if total > 0 else 100.0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for diagnostics."""
+        return {
+            'uptime_seconds': round(self.uptime, 1),
+            'messages_sent': self.messages_sent,
+            'messages_received': self.messages_received,
+            'commands_success': self.commands_success,
+            'commands_failed': self.commands_failed,
+            'commands_retried': self.commands_retried,
+            'success_rate': round(self.success_rate, 1),
+            'reconnect_count': self.reconnect_count,
+            'keepalive_total': self.keepalive_count,
+            'keepalive_success': self.keepalive_success,
+            'keepalive_failed': self.keepalive_failed,
+            'last_error': self.last_error,
+            'last_error_time': self.last_error_time,
+        }
 
 
 class ProGateway:
@@ -55,7 +125,29 @@ class ProGateway:
         self._json_error_count: int = 0
         self._last_topology_devices: Set[Union[str, int]] = set()
         self._was_connected: bool = False
-        self._reconnect_count: int = 0
+        
+        # Statistics for diagnostics
+        self.stats = GatewayStatistics()
+        
+        # Command queue for preventing race conditions
+        self._command_queue: asyncio.Queue[CommandQueueItem] = asyncio.Queue()
+        self._queue_processor_task: Optional[asyncio.Task] = None
+        self._command_lock = asyncio.Lock()
+        
+        # Debouncing for rapid commands (device_id -> pending command)
+        self._pending_commands: Dict[Union[str, int], CommandQueueItem] = {}
+        self._debounce_tasks: Dict[Union[str, int], asyncio.Task] = {}
+        
+        # Topology cache
+        self._topology_cache: Optional[Dict] = None
+        self._topology_cache_time: float = 0
+        self._topology_cache_ttl: float = options.get('topology_cache_ttl', TOPOLOGY_CACHE_TTL)
+        
+        # Configurable transition time (default 5 seconds)
+        self.transition_time: float = options.get('transition_time', 5.0)
+        
+        # Retry settings
+        self._default_retries: int = options.get('retries', DEFAULT_RETRIES)
 
         self.log.debug('[%s] Gateway initialized, pid=%s', self.host, self.pid)
 
@@ -105,7 +197,12 @@ class ProGateway:
         self._stopping = False
         self._reconnect_delay = MIN_RECONNECT_DELAY
         self._json_error_count = 0
+        self.stats = GatewayStatistics()  # Reset statistics on start
         self._msgs['ready'] = asyncio.get_running_loop().create_future()
+        
+        # Start command queue processor
+        self._queue_processor_task = asyncio.create_task(self._process_command_queue())
+        
         self.main_task = asyncio.create_task(self.run_forever())
         self.log.info('[%s] Gateway starting', self.host)
         await self.ready()
@@ -128,6 +225,22 @@ class ProGateway:
         """Stop the gateway connection and cleanup."""
         self.log.info('[%s] Gateway stopping', self.host)
         self._stopping = True
+        
+        # Cancel command queue processor
+        if self._queue_processor_task and not self._queue_processor_task.done():
+            self._queue_processor_task.cancel()
+            try:
+                await self._queue_processor_task
+            except asyncio.CancelledError:
+                pass
+        self._queue_processor_task = None
+        
+        # Cancel debounce tasks
+        for task in self._debounce_tasks.values():
+            if not task.done():
+                task.cancel()
+        self._debounce_tasks.clear()
+        self._pending_commands.clear()
         
         # Cancel keepalive task
         if self._keepalive_task and not self._keepalive_task.done():
@@ -237,8 +350,10 @@ class ProGateway:
                 del self._msgs['ready']
             self._update_connection_state(True)
             if self._was_connected:
-                self._reconnect_count += 1
+                self.stats.reconnect_count += 1
                 self._send_reconnect_notification()
+                # State reconciliation after reconnect
+                asyncio.create_task(self._reconcile_state())
             self._was_connected = True
         return True
 
@@ -258,18 +373,116 @@ class ProGateway:
                 await asyncio.sleep(self.keepalive)
                 if self._stopping or not self.writer:
                     break
-                # Send a lightweight topology request as keepalive
-                result = await self.send('gateway_get.node', params={'id': 0}, wait_result=True)
+                # Send a lightweight topology request as keepalive (bypass queue for reliability)
+                result = await self._send_internal('gateway_get.node', params={'id': 0}, wait_result=True)
+                self.stats.keepalive_count += 1
                 if result is None:
-                    self.log.warning('[%s] Keepalive failed, connection may be dead', self.host)
+                    self.stats.keepalive_failed += 1
+                    self.log.warning('[%s] Keepalive failed (%d/%d), connection may be dead', 
+                                    self.host, self.stats.keepalive_failed, self.stats.keepalive_count)
                     await self._close_connection()
                     break
-                self.log.debug('[%s] Keepalive OK', self.host)
+                self.stats.keepalive_success += 1
+                # Log keepalive success only every 10th check to reduce noise
+                if self.stats.keepalive_count % 10 == 0:
+                    self.log.debug('[%s] Keepalive: %d/%d checks OK', 
+                                  self.host, self.stats.keepalive_success, self.stats.keepalive_count)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 self.log.debug('[%s] Keepalive error: %s', self.host, exc)
                 break
+    
+    async def _reconcile_state(self) -> None:
+        """Reconcile device states after reconnection."""
+        self.log.info('[%s] Reconciling device states after reconnect', self.host)
+        try:
+            # Invalidate topology cache
+            self._topology_cache = None
+            self._topology_cache_time = 0
+            
+            # Request fresh topology
+            await self.topology(wait_result=True)
+            
+            # Update all entities
+            for device in self.devices.values():
+                for entity in device.entities.values():
+                    if hasattr(entity, 'async_write_ha_state'):
+                        try:
+                            entity.async_write_ha_state()
+                        except Exception:
+                            pass
+            
+            self.log.info('[%s] State reconciliation complete, %d devices updated', 
+                         self.host, len(self.devices))
+        except Exception as exc:
+            self.log.warning('[%s] State reconciliation failed: %s', self.host, exc)
+    
+    async def _process_command_queue(self) -> None:
+        """Process commands from the queue sequentially."""
+        while not self._stopping:
+            try:
+                item = await asyncio.wait_for(self._command_queue.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+            
+            if self._stopping:
+                if not item.future.done():
+                    item.future.cancel()
+                break
+            
+            try:
+                result = await self._send_with_retry(
+                    item.method, 
+                    item.retries,
+                    **item.kwargs
+                )
+                if not item.future.done():
+                    item.future.set_result(result)
+            except Exception as exc:
+                if not item.future.done():
+                    item.future.set_exception(exc)
+    
+    async def _send_with_retry(self, method: str, retries: int = DEFAULT_RETRIES, **kwargs: Any) -> Optional[Dict]:
+        """Send command with retry logic."""
+        last_error = None
+        
+        for attempt in range(retries):
+            try:
+                result = await self._send_internal(method, **kwargs)
+                if result is not None:
+                    self.stats.commands_success += 1
+                    return result
+                
+                # None result might indicate connection issue
+                if attempt < retries - 1:
+                    self.stats.commands_retried += 1
+                    delay = RETRY_DELAY_BASE * (2 ** attempt)
+                    self.log.debug('[%s] Command %s returned None, retry %d/%d in %.1fs', 
+                                  self.host, method, attempt + 1, retries, delay)
+                    await asyncio.sleep(delay)
+            except (ConnectionError, BrokenPipeError, OSError) as exc:
+                last_error = exc
+                if attempt < retries - 1:
+                    self.stats.commands_retried += 1
+                    delay = RETRY_DELAY_BASE * (2 ** attempt)
+                    self.log.debug('[%s] Command %s failed with %s, retry %d/%d in %.1fs', 
+                                  self.host, method, type(exc).__name__, attempt + 1, retries, delay)
+                    await asyncio.sleep(delay)
+            except Exception as exc:
+                last_error = exc
+                self.log.error('[%s] Command %s unexpected error: %s', self.host, method, exc)
+                break
+        
+        # All retries failed
+        self.stats.commands_failed += 1
+        self.stats.last_error = str(last_error) if last_error else 'Command returned None'
+        self.stats.last_error_time = time.time()
+        self.log.warning('[%s] Command %s failed after %d attempts: %s', 
+                        self.host, method, retries, last_error)
+        return None
 
     async def _read_loop(self) -> None:
         """Read messages continuously until disconnect."""
@@ -328,16 +541,22 @@ class ProGateway:
         cmd = dat.get("method")
         cid = cmd if cmd in ("gateway_post.topology", "device_post.topology") else dat.get("id")
         nodes = dat.get("nodes") or []
+        is_topology = cmd in ("gateway_post.topology", "device_post.topology")
 
+        self.stats.messages_received += 1
+        self.stats.last_message_time = time.time()
+        
         if ack := self._msgs.get(cid):
             ack.set_result(dat)
-            self.log.debug('[%s] Response received: method=%s, id=%s, data=%s', 
-                          self.host, cmd, cid, json.dumps(dat, ensure_ascii=False, default=str))
+            # Only log response data for non-keepalive commands
+            if cmd != 'gateway_get.node' or len(nodes) > 1:
+                self.log.debug('[%s] Response received: method=%s, id=%s, data=%s', 
+                              self.host, cmd, cid, json.dumps(dat, ensure_ascii=False, default=str))
         else:
             self.log.debug('[%s] Message: method=%s, nodes=%d', self.host, cmd, len(nodes))
-            self.log.debug('[%s] Message data: %s', self.host, json.dumps(dat, ensure_ascii=False, default=str))
-
-        is_topology = cmd in ("gateway_post.topology", "device_post.topology")
+            # Log full message data only for topology or multi-node messages
+            if is_topology or len(nodes) > 1:
+                self.log.debug('[%s] Message data: %s', self.host, json.dumps(dat, ensure_ascii=False, default=str))
 
         if is_topology and not self.device:
             if self.pid == PID_WIFI_PANEL and nodes:
@@ -390,16 +609,99 @@ class ProGateway:
                 continue
 
             if cmd in ("gateway_post.prop", "device_post.prop"):
-                self.log.debug('[%s] Property change for device %s: %s', 
-                              self.host, nid, json.dumps(node.get('prop', {}), ensure_ascii=False, default=str))
+                # Only log if there are actual property changes
+                prop_data = node.get('prop', {})
+                params_data = node.get('params', {})
+                if prop_data or params_data:
+                    log_data = {**prop_data, **params_data}
+                    self.log.debug('[%s] Property change for device %s: %s', 
+                                  self.host, nid, json.dumps(log_data, ensure_ascii=False, default=str))
                 await dvc.prop_changed(node)
             elif cmd in ("gateway_post.event", "device_post.event"):
-                self.log.debug('[%s] Event fired for device %s: %s', 
-                              self.host, nid, json.dumps(node.get('event', {}), ensure_ascii=False, default=str))
+                event_data = node.get('event', {})
+                if event_data:
+                    self.log.debug('[%s] Event fired for device %s: %s', 
+                                  self.host, nid, json.dumps(event_data, ensure_ascii=False, default=str))
                 await dvc.event_fired(node)
 
     async def send(self, method: str, wait_result: bool = True, **kwargs: Any) -> Optional[Dict]:
-        """Send a command to the gateway."""
+        """Send a command to the gateway via command queue with retry."""
+        # For topology and internal commands, bypass queue
+        if method in ("gateway_get.topology", "device_get.topology", "gateway_get.node"):
+            return await self._send_internal(method, wait_result=wait_result, **kwargs)
+        
+        # Queue the command for sequential processing
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        item = CommandQueueItem(
+            method=method,
+            kwargs={'wait_result': wait_result, **kwargs},
+            future=future,
+            retries=self._default_retries,
+        )
+        await self._command_queue.put(item)
+        
+        try:
+            return await asyncio.wait_for(future, self.timeout * self._default_retries)
+        except asyncio.TimeoutError:
+            self.log.warning('[%s] Command %s timed out in queue', self.host, method)
+            return None
+        except asyncio.CancelledError:
+            return None
+    
+    async def send_debounced(
+        self, 
+        method: str, 
+        device_id: Union[str, int],
+        debounce_delay: float = COMMAND_DEBOUNCE_DELAY,
+        **kwargs: Any
+    ) -> Optional[Dict]:
+        """Send a command with debouncing for rapid changes."""
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        
+        # Cancel previous pending command for this device
+        if device_id in self._debounce_tasks:
+            self._debounce_tasks[device_id].cancel()
+            # Cancel the old future
+            if device_id in self._pending_commands:
+                old_item = self._pending_commands[device_id]
+                if not old_item.future.done():
+                    old_item.future.cancel()
+        
+        # Store new pending command
+        item = CommandQueueItem(
+            method=method,
+            kwargs=kwargs,
+            future=future,
+            device_id=device_id,
+        )
+        self._pending_commands[device_id] = item
+        
+        async def _debounced_send():
+            await asyncio.sleep(debounce_delay)
+            if device_id in self._pending_commands:
+                pending = self._pending_commands.pop(device_id)
+                self._debounce_tasks.pop(device_id, None)
+                try:
+                    result = await self.send(pending.method, **pending.kwargs)
+                    if not pending.future.done():
+                        pending.future.set_result(result)
+                except Exception as exc:
+                    if not pending.future.done():
+                        pending.future.set_exception(exc)
+        
+        self._debounce_tasks[device_id] = asyncio.create_task(_debounced_send())
+        
+        try:
+            return await asyncio.wait_for(future, self.timeout + debounce_delay)
+        except asyncio.TimeoutError:
+            return None
+        except asyncio.CancelledError:
+            return None
+    
+    async def _send_internal(self, method: str, wait_result: bool = True, **kwargs: Any) -> Optional[Dict]:
+        """Internal send implementation without queue or retry."""
         if not self.writer:
             if not await self.connect():
                 self.log.warning('[%s] Cannot send %s: not connected', self.host, method)
@@ -426,6 +728,7 @@ class ProGateway:
         try:
             self.writer.write(json.dumps(dat).encode() + MSG_SPLIT)
             await self.writer.drain()
+            self.stats.messages_sent += 1
         except Exception as exc:
             self.log.error('[%s] Send error for %s: %s', self.host, method, exc)
             if cid in self._msgs:
@@ -448,10 +751,29 @@ class ProGateway:
         
         return fut.result()
 
-    async def topology(self, wait_result: bool = False) -> Optional[Dict]:
-        """Request topology from gateway."""
+    async def topology(self, wait_result: bool = False, use_cache: bool = True) -> Optional[Dict]:
+        """Request topology from gateway with optional caching."""
+        # Check cache first
+        if use_cache and self._topology_cache:
+            cache_age = time.time() - self._topology_cache_time
+            if cache_age < self._topology_cache_ttl:
+                self.log.debug('[%s] Using cached topology (age: %.1fs)', self.host, cache_age)
+                return self._topology_cache
+        
         cmd = 'device_get.topology' if self.pid == PID_WIFI_PANEL else 'gateway_get.topology'
-        return await self.send(cmd, wait_result=wait_result)
+        result = await self._send_internal(cmd, wait_result=wait_result)
+        
+        # Update cache on success
+        if result:
+            self._topology_cache = result
+            self._topology_cache_time = time.time()
+        
+        return result
+    
+    def invalidate_topology_cache(self) -> None:
+        """Invalidate the topology cache."""
+        self._topology_cache = None
+        self._topology_cache_time = 0
 
     async def get_node(self, nid: int = 0, wait_result: bool = True) -> Optional[Dict]:
         """Get node information."""
@@ -478,6 +800,19 @@ class ProGateway:
     def device_count(self) -> int:
         """Return number of devices."""
         return len(self.devices)
+    
+    @property
+    def diagnostics(self) -> Dict[str, Any]:
+        """Return diagnostics data."""
+        return {
+            'host': self.host,
+            'connected': self.is_connected,
+            'device_count': self.device_count,
+            'pid': self.pid,
+            'transition_time': self.transition_time,
+            'topology_cache_age': time.time() - self._topology_cache_time if self._topology_cache else None,
+            **self.stats.to_dict(),
+        }
 
     def _update_connection_state(self, connected: bool) -> None:
         """Update gateway device connection state."""
@@ -492,7 +827,7 @@ class ProGateway:
             from homeassistant.components import persistent_notification
             persistent_notification.async_create(
                 self.hass,
-                f"Gateway {self.host} reconnected (attempt #{self._reconnect_count})",
+                f"Gateway {self.host} reconnected (attempt #{self.stats.reconnect_count})",
                 title="Yeelight Pro Reconnected",
                 notification_id=f"{DOMAIN}-reconnect-{self.host}",
             )

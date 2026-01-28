@@ -1,5 +1,49 @@
 # Release Notes
 
+## [0.7.0] - 2026-01-28
+
+### ✨ Major Feature Release
+
+This release brings significant improvements to reliability, performance, and monitoring capabilities.
+
+### 🔒 Reliability Improvements
+
+- **Retry Mechanism** - Failed commands are automatically retried up to 3 times with exponential backoff (0.5s, 1s, 2s delays)
+- **Command Queue** - All commands are now processed sequentially to prevent race conditions
+- **State Reconciliation** - After reconnection, device states are automatically synchronized with the gateway
+
+### ⚡ Performance Improvements
+
+- **Topology Caching** - Topology requests are cached for 5 minutes to reduce gateway load
+- **Debouncing** - Rapid command changes (like slider adjustments) are debounced to prevent flooding
+
+### 📊 New Diagnostics Sensor
+
+A new diagnostic sensor is automatically created for each gateway with:
+- **Connection status** (OK, Degraded, Poor, Disconnected)
+- **Uptime** in human-readable format
+- **Message statistics** (sent/received)
+- **Command statistics** (success, failed, retried, success rate)
+- **Keepalive statistics** (total, success, failed)
+- **Reconnect count**
+- **Last error information**
+
+### ⚙️ New Configuration Options
+
+- **Transition Time** - Configure light transition time in integration options (0.5-30 seconds, default 5s)
+
+### 🏗️ Technical Changes
+
+- Added `GatewayStatistics` dataclass for comprehensive metrics tracking
+- Added `CommandQueueItem` dataclass for command queue management
+- Gateway now exposes `diagnostics` property with all statistics
+- New `send_debounced()` method for debounced command sending
+- New `invalidate_topology_cache()` method for manual cache invalidation
+
+**Full Changelog**: [0.6.1...0.7.0](https://github.com/rdscoo1/yeelight-pro/compare/0.6.1...0.7.0)
+
+---
+
 ## [0.6.1] - 2026-01-28
 
 ### 🐛 Bug Fixes

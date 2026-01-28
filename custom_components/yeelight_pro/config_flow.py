@@ -10,11 +10,15 @@ from .core.const import (
     DEFAULT_NAME,
     CONF_PID,
     CONF_KEEPALIVE,
+    CONF_TRANSITION_TIME,
     PID_GATEWAY,
     GATEWAY_TYPES,
     DEFAULT_KEEPALIVE,
     MIN_KEEPALIVE,
     MAX_KEEPALIVE,
+    DEFAULT_TRANSITION_TIME,
+    MIN_TRANSITION_TIME,
+    MAX_TRANSITION_TIME,
 )
 
 
@@ -31,6 +35,10 @@ def get_options_schema(defaults: dict):
             CONF_KEEPALIVE,
             default=defaults.get(CONF_KEEPALIVE, DEFAULT_KEEPALIVE)
         ): vol.All(vol.Coerce(int), vol.Range(min=MIN_KEEPALIVE, max=MAX_KEEPALIVE)),
+        vol.Optional(
+            CONF_TRANSITION_TIME,
+            default=defaults.get(CONF_TRANSITION_TIME, DEFAULT_TRANSITION_TIME)
+        ): vol.All(vol.Coerce(float), vol.Range(min=MIN_TRANSITION_TIME, max=MAX_TRANSITION_TIME)),
     }
 
 
@@ -88,7 +96,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     self.hass.config_entries.async_update_entry(
                         config_entry, data={**config_entry.data, CONF_HOST: user_input[CONF_HOST]}
                     )
-                    options = {CONF_KEEPALIVE: user_input.get(CONF_KEEPALIVE, DEFAULT_KEEPALIVE)}
+                    options = {
+                        CONF_KEEPALIVE: user_input.get(CONF_KEEPALIVE, DEFAULT_KEEPALIVE),
+                        CONF_TRANSITION_TIME: user_input.get(CONF_TRANSITION_TIME, DEFAULT_TRANSITION_TIME),
+                    }
                     return self.async_create_entry(title='', data=options)
             errors['base'] = 'cannot_access'
         user_input = {

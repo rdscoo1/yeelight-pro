@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-01-28
+
+### Added
+- **Retry mechanism** for failed commands with exponential backoff (3 retries by default)
+- **Command queue** for sequential command processing and race condition prevention
+- **Debouncing** for rapid changes (prevents command flooding during slider adjustments)
+- **Topology caching** with configurable TTL (5 minutes default) to reduce gateway load
+- **State reconciliation** after reconnection - automatically syncs device states
+- **Diagnostics sensor** for gateway monitoring with detailed statistics:
+  - Uptime, messages sent/received, success rate
+  - Command statistics (success, failed, retried)
+  - Keepalive and reconnect counters
+  - Last error information
+- **Configurable transition time** in integration options (0.5-30 seconds)
+- **GatewayStatistics dataclass** for comprehensive metrics tracking
+
+### Changed
+- Commands now go through a queue for sequential processing (topology/node requests bypass queue)
+- Keepalive now uses internal send method to bypass queue for reliability
+- Statistics reset on gateway start
+
 ## [0.6.1] - 2026-01-28
 
 ### Fixed

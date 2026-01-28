@@ -133,7 +133,9 @@ class XLightEntity(XEntity, LightEntity):
             self.target_task.cancel()
 
         diff = time.time() - self._target_attrs.get("time", 0)
-        delay = float(self._target_attrs.get(ATTR_TRANSITION) or 5)
+        # Use gateway's configurable transition time, fallback to 5 seconds
+        default_transition = getattr(self.device.gateway, 'transition_time', 5.0) if self.device.gateway else 5.0
+        delay = float(self._target_attrs.get(ATTR_TRANSITION) or default_transition)
 
         async def _apply_state_later():
             await asyncio.sleep(max(0, delay - diff) + 0.01)
@@ -156,11 +158,12 @@ class XLightEntity(XEntity, LightEntity):
                     pending.pop(k, None)
             if pending:
                 self.target_task = asyncio.create_task(_apply_state_later())
-                _LOGGER.debug(
-                    "%s: Ignore new state during transition: %s",
-                    self.name,
-                    [data, self._target_attrs, diff, delay],
-                )
+                # Transition handling is working correctly, no need to log every occurrence
+                # _LOGGER.debug(
+                #     "%s: Ignore new state during transition: %s",
+                #     self.name,
+                #     [data, self._target_attrs, diff, delay],
+                # )
                 return
 
         super().async_set_state(data)

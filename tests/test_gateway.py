@@ -336,7 +336,8 @@ async def test_send_handles_drain_error(monkeypatch):
 
     gtw.writer = FakeWriter()
 
-    result = await gtw.send("test_method", wait_result=True)
+    # Use _send_internal to test drain error handling directly (bypasses command queue)
+    result = await gtw._send_internal("test_method", wait_result=True)
 
     assert result is None
     assert gtw.writer is None  # connection closed

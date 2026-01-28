@@ -24,7 +24,8 @@
         "description": "{tip}",
         "data": {
           "host": "Host",
-          "keepalive": "Keepalive interval (seconds)"
+          "keepalive": "Keepalive interval (seconds)",
+          "transition_time": "Light transition time (seconds)"
         }
       }
     },
@@ -36,6 +37,11 @@
     "binary_sensor": {
       "connection": {
         "name": "Connection"
+      }
+    },
+    "sensor": {
+      "diagnostics": {
+        "name": "Diagnostics"
       }
     },
     "update": {

@@ -345,6 +345,7 @@ class GatewayDevice(XDevice):
         super().setup_converters()
         self.add_converter(Converter('connection', 'binary_sensor', device_class='connectivity'))
         self.add_converter(Converter('firmware', 'update'))
+        self.add_converter(Converter('diagnostics', 'sensor'))
 
     @property
     def online(self):
