@@ -87,9 +87,9 @@ class ProGateway:
                 'id': device.id,
                 'name': device.name,
                 'type': device.type,
-                'model': device.model,
-                'pid': device.pid,
-                'firmware': device.firmware_version,
+                'model': getattr(device, 'model', None),
+                'pid': getattr(device, 'pid', None),
+                'firmware': getattr(device, 'firmware_version', None),
                 'properties': device.prop
             }, ensure_ascii=False, default=str))
         if self not in device.gateways:

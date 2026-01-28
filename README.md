@@ -1,7 +1,6 @@
 # Yeelight Pro Integration for Home Assistant
 
-[![HACS Validation](https://github.com/rdscoo1/yeelight-pro/actions/workflows/validate.yml/badge.svg?branch=main)](https://github.com/rdscoo1/yeelight-pro/actions/workflows/validate.yml)
-[![Tests](https://github.com/rdscoo1/yeelight-pro/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/rdscoo1/yeelight-pro/actions/workflows/tests.yml)
+[![CI](https://github.com/rdscoo1/yeelight-pro/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rdscoo1/yeelight-pro/actions/workflows/ci.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/rdscoo1/yeelight-pro)](https://github.com/rdscoo1/yeelight-pro/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

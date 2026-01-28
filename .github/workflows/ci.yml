@@ -1,4 +1,4 @@
-name: Tests
+name: CI
 
 on:
   push:
@@ -13,12 +13,27 @@ on:
   workflow_dispatch:
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    name: HACS & Hassfest Validation
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+
+      - name: Hassfest validation
+        uses: home-assistant/actions/hassfest@master
+
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
-    name: Python ${{ matrix.python-version }}
+    name: Tests (Python ${{ matrix.python-version }})
     steps:
       - name: Checkout
         uses: actions/checkout@v4
