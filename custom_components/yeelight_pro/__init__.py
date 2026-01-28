@@ -366,9 +366,26 @@ class XEntity(Entity):
         self._option = option or {}
         self._attr_available = device.online if device.online is not None else True
         self._attr_name = f'{device.name} {conv.attr}'.strip()
-        # Build a gateway-scoped unique_id to avoid collisions across multiple gateways
-        host_or_entry = getattr(device.gateway, "entry_id", None) or getattr(device.gateway, "host", "gw")
-        self._attr_unique_id = f"{host_or_entry}-{device.id}-{self._name}"
+        
+        # Prefer gateway host over entry_id for better stability across reinstalls
+        gw_id = getattr(device.gateway, "host", "gw")
+        
+        # Check if old unique_id exists in registry - if so, use it to avoid duplicates
+        old_uid = f"{device.id}-{self._name}"
+        new_uid = f"{gw_id}-{device.id}-{self._name}"
+        
+        # Try to check registry for existing entity (may not be available in tests)
+        existing_entity = None
+        try:
+            if hasattr(self.hass, 'data'):
+                reg = er.async_get(self.hass)
+                existing_entity = reg.async_get_entity_id(conv.domain, DOMAIN, old_uid)
+        except Exception:
+            pass
+        
+        # Use old unique_id if it exists in registry, otherwise use new format
+        self._attr_unique_id = old_uid if existing_entity else new_uid
+        
         self._attr_has_entity_name = True
         self._attr_icon = self._option.get('icon')
         self._attr_entity_picture = self._option.get('picture')
@@ -379,10 +396,16 @@ class XEntity(Entity):
 
         via_device = None
         if not isinstance(device, (GatewayDevice, WifiPanelDevice)):
-            via_device = (DOMAIN, f"{host_or_entry}-{device.gateway.device.id}")
+            # Use gateway host as via_device identifier to ensure it exists in registry
+            via_device = (DOMAIN, f"{gw_id}-{device.gateway.host}")
 
+        # Dual identifiers: old (for backward compatibility) + new (for future)
+        # HA will match by old identifier but also add the new one
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{host_or_entry}-{device.id}")},
+            identifiers={
+                (DOMAIN, str(device.id)),              # Old anchor (important for migration!)
+                (DOMAIN, f"{gw_id}-{device.id}"),     # New format
+            },
             name=device.name,
             model=device.pid or device.type or '',
             via_device=via_device,
@@ -395,17 +418,8 @@ class XEntity(Entity):
         device.entities[conv.attr] = self
 
     async def async_added_to_hass(self):
-        # Migrate old unique_id "{device.id}-{attr}" -> new "{host}-{device.id}-{attr}"
-        try:
-            reg = er.async_get(self.hass)
-            old_uid = f"{self.device.id}-{self._name}"
-            new_uid = self.unique_id  # set from __init__
-            if old_uid != new_uid:
-                ent_id = reg.async_get_entity_id(self.platform.domain, DOMAIN, old_uid)
-                if ent_id:
-                    reg.async_update_entity(ent_id, new_unique_id=new_uid)
-        except Exception:
-            _LOGGER.debug("Unique ID migration skipped", exc_info=True)
+        # Migration logic is now handled in __init__ by checking existing registry entries
+        # This ensures we use the old unique_id if it exists, avoiding duplicates
 
         if hasattr(self, 'async_get_last_state'):
             state = await self.async_get_last_state()

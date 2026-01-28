@@ -250,10 +250,9 @@ async def test_prestage_color_temp_mired_with_clamp(monkeypatch):
 
     monkeypatch.setattr(entity, "device_send_props", fake_send)
 
-    # mired, соответствующий очень большому Kelvin,
-    # должен заклампиться до maxk=6500
-    mired = 50  # 1_000_000 / 50 = 20000 K
-    await entity.async_prestage_color_temp(**{ATTR_COLOR_TEMP: mired})
+    # Kelvin выше максимума должен заклампиться до maxk=6500
+    kelvin = 20000  # Выше максимума
+    await entity.async_prestage_color_temp(**{ATTR_COLOR_TEMP_KELVIN: kelvin})
 
     assert sent["color_temp"] == 6500
     assert entity.color_temp_kelvin == 6500
