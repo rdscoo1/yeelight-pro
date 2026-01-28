@@ -1,5 +1,15 @@
 # Release Notes
 
+## [0.5.2] - 2026-01-28
+
+### 🛠️ Maintenance
+
+- Fixed manifest key ordering to satisfy Home Assistant validation
+
+**Full Changelog**: [0.5.1...0.5.2](https://github.com/rdscoo1/yeelight-pro/compare/0.5.1...0.5.2)
+
+---
+
 ## [0.5.1] - 2026-01-28
 
 ### 🛠️ Release Maintenance
