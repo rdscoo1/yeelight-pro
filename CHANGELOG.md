@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.5] - 2026-01-30
+
+### Fixed
+- **Brightness/color updates blocked by on/off state**
+  - Removed `light` (on/off state) from watched transition attributes
+  - Gateway doesn't always send `p:true` when changing brightness on already-on light
+  - This caused `pending={"light": true}` to remain forever and block all attribute updates
+  - Now only `brightness`, `color_temp_kelvin`, and `rgb_color` are watched during transitions
+
 ## [0.7.4] - 2026-01-30
 
 ### Fixed

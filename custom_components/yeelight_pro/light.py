@@ -151,8 +151,10 @@ class XLightEntity(XEntity, LightEntity):
             # Clearing _target_attrs here causes issues with subsequent updates
 
         if diff < delay and self._target_attrs:
+            # Only watch actual light attributes, not on/off state
+            # On/off state (self._name / "light") should not block brightness/color updates
+            # because gateway doesn't always send p:true when changing brightness on already-on light
             watched = {
-                self._name,
                 ATTR_BRIGHTNESS,
                 ATTR_COLOR_TEMP_KELVIN,
                 ATTR_RGB_COLOR,
