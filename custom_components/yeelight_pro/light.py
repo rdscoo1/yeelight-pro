@@ -221,6 +221,14 @@ class XLightEntity(XEntity, LightEntity):
 
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
             k = self._clamp_ct_kelvin(int(kwargs[ATTR_COLOR_TEMP_KELVIN]))
+            
+            # Optimization: skip if color temp is already set and light is OFF
+            # This is safe because when light is OFF, temperature cannot change externally
+            if self._attr_is_on is False and self._attr_color_temp_kelvin == k:
+                _LOGGER.debug('%s: Color temp already set to %s K, skipping gateway request', 
+                             self.entity_id, k)
+                return True
+            
             payload["color_temp"] = k
             self._attr_color_temp_kelvin = k
             self._attr_color_temp = int(1_000_000 / max(1, k))

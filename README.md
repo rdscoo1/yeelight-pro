@@ -4,6 +4,8 @@
 [![GitHub Release](https://img.shields.io/github/v/release/rdscoo1/yeelight-pro)](https://github.com/rdscoo1/yeelight-pro/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+**English** | [Русский](README_RU.md)
+
 ## Overview
 
 Yeelight Pro is a custom integration for [Home Assistant](https://www.home-assistant.io/) that connects your **Yeelight Pro Gateway** and all connected devices to the Home Assistant ecosystem. It provides comprehensive control and monitoring of lights, sensors, switches, climate devices, and more through a local TCP connection.
@@ -212,6 +214,32 @@ automation:
       - service: light.turn_off
         target:
           entity_id: light.yp_group_1_light
+```
+
+### 6. Prestage Color Temperature Before Turning On
+
+Use the `prestage_color_temp` service to set color temperature while the light is OFF, then turn it on. This ensures the light turns on with the desired color temperature immediately.
+
+```yaml
+automation:
+  - alias: "Light: Warm morning light"
+    description: "Set warm color temperature before turning on morning light"
+    trigger:
+      - platform: time
+        at: "07:00:00"
+    action:
+      # First, set color temperature while light is OFF
+      - service: yeelight_pro.prestage_color_temp
+        target:
+          entity_id: light.bedroom_ceiling
+        data:
+          color_temp_kelvin: 2700  # Warm white
+      # Then turn on the light
+      - service: light.turn_on
+        target:
+          entity_id: light.bedroom_ceiling
+        data:
+          brightness: 128
 ```
 
 ## Troubleshooting

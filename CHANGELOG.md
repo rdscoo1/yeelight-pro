@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-01-30
+
+### 🎉 Stable Release
+
+This is the first stable release of Yeelight Pro integration with comprehensive bug fixes and improvements.
+
+### Added
+- **Russian README** (`README_RU.md`) with full documentation
+- **Prestage color temperature service** - set color temp while light is OFF
+- **Prestage color temperature example** in automation documentation
+- Complete automation examples for common use cases
+- **Smart optimization** - `prestage_color_temp` skips gateway request if temperature already set (when light is OFF)
+
+### Fixed
+- **UI state synchronization** - removed transition-blocking logic that caused UI to show stale values
+- **Color temperature rounding** - gateway now trusted as source of truth for all state updates
+- **Entity platform errors** - added `self.added` check before `async_write_ha_state()`
+- **ATTR_TRANSITION import** - restored missing import
+
+### Changed
+- Simplified state update logic - all gateway updates applied immediately
+- Removed unused code: `target_task`, `_target_attrs`, transition delays
+- Improved logging for better debugging
+
+### Performance
+- Reduced network traffic in `prestage_color_temp` by skipping redundant requests
+- Faster response time when color temperature is already set
+
+### Technical
+- 104 passing tests
+- Full test coverage for light entity
+- CI/CD with GitHub Actions
+
 ## [0.7.7] - 2026-01-30
 
 ### Fixed
