@@ -146,11 +146,10 @@ class XLightEntity(XEntity, LightEntity):
         async def _apply_state_later():
             _LOGGER.debug('%s: _apply_state_later started, waiting %.2fs', self.entity_id, max(0, delay - diff) + 0.01)
             await asyncio.sleep(max(0, delay - diff) + 0.01)
-            _LOGGER.debug('%s: _apply_state_later executing async_write_ha_state, current attrs: is_on=%s, color_temp_kelvin=%s, brightness=%s', 
-                         self.entity_id, self._attr_is_on, self._attr_color_temp_kelvin, self._attr_brightness)
-            # Don't apply stale data from closure - just refresh the UI state
-            # The actual state should already be updated by subsequent gateway messages
-            self.async_write_ha_state()
+            _LOGGER.debug('%s: _apply_state_later finished waiting, clearing target_attrs', self.entity_id)
+            # Clear target_attrs to allow new updates to be processed
+            # Don't call async_write_ha_state() as it would send stale attributes
+            self._target_attrs = {}
 
         if diff < delay and self._target_attrs:
             watched = {

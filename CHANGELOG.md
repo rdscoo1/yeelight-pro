@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-01-30
+
+### Fixed
+- **UI jumping back to old values after state changes**
+  - Fixed `_apply_state_later()` sending stale attributes via `async_write_ha_state()`
+  - Now only clears `_target_attrs` without triggering UI update with outdated data
+  - Resolves issue where brightness/color temp would revert to old values in UI while physical device had correct values
+
 ## [0.7.2] - 2026-01-30
 
 ### Fixed
