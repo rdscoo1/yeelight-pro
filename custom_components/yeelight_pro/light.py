@@ -1,7 +1,5 @@
 """Support for light."""
 import logging
-import asyncio
-import time
 import json
 import voluptuous as vol
 
@@ -16,7 +14,6 @@ from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_TEMP_KELVIN,
     ATTR_RGB_COLOR,
-    ATTR_TRANSITION,
 )
 
 from . import (
@@ -66,7 +63,6 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
 
 class XLightEntity(XEntity, LightEntity):
     _attr_is_on = None
-    target_task: asyncio.Task = None
 
     def __init__(self, device: XDevice, conv: Converter, option=None):
         super().__init__(device, conv, option)
@@ -115,8 +111,6 @@ class XLightEntity(XEntity, LightEntity):
         _LOGGER.debug('Light entity initialized: supported_modes=%s, color_mode=%s, features=%s', 
                      list(self._attr_supported_color_modes), self._attr_color_mode, self._attr_supported_features)
 
-        self._target_attrs = {}
-
     def _clamp_ct_kelvin(self, k: int) -> int:
         lo = getattr(self, "_attr_min_color_temp_kelvin", None)
         hi = getattr(self, "_attr_max_color_temp_kelvin", None)
@@ -131,50 +125,14 @@ class XLightEntity(XEntity, LightEntity):
     def async_set_state(self, data: dict):
         _LOGGER.debug('%s: async_set_state called with data: %s', self.entity_id, json.dumps(data, ensure_ascii=False, default=str))
         
-        if self.target_task:
-            _LOGGER.debug('%s: Cancelling previous target_task', self.entity_id)
-            self.target_task.cancel()
-
-        diff = time.time() - self._target_attrs.get("time", 0)
-        # Use gateway's configurable transition time, fallback to 5 seconds
-        default_transition = getattr(self.device.gateway, 'transition_time', 5.0) if self.device.gateway else 5.0
-        delay = float(self._target_attrs.get(ATTR_TRANSITION) or default_transition)
+        # Always apply state updates from gateway immediately
+        # The previous transition-blocking logic caused issues:
+        # 1. color_temp values don't match exactly due to rounding in converter
+        # 2. on/off state blocked brightness/color updates
+        # 3. _apply_state_later with stale closure data caused UI to revert
+        # 
+        # Now we trust the gateway as the source of truth and always update
         
-        _LOGGER.debug('%s: Transition check: diff=%.2fs, delay=%.2fs, target_attrs=%s', 
-                     self.entity_id, diff, delay, json.dumps(self._target_attrs, ensure_ascii=False, default=str))
-
-        async def _apply_state_later():
-            _LOGGER.debug('%s: _apply_state_later started, waiting %.2fs', self.entity_id, max(0, delay - diff) + 0.01)
-            await asyncio.sleep(max(0, delay - diff) + 0.01)
-            _LOGGER.debug('%s: _apply_state_later finished waiting', self.entity_id)
-            # Do nothing - the state should already be updated by gateway messages
-            # Clearing _target_attrs here causes issues with subsequent updates
-
-        if diff < delay and self._target_attrs:
-            # Only watch actual light attributes, not on/off state
-            # On/off state (self._name / "light") should not block brightness/color updates
-            # because gateway doesn't always send p:true when changing brightness on already-on light
-            watched = {
-                ATTR_BRIGHTNESS,
-                ATTR_COLOR_TEMP_KELVIN,
-                ATTR_RGB_COLOR,
-            }
-            pending = {
-                k: v for k, v in self._target_attrs.items() if k in watched
-            }
-            _LOGGER.debug('%s: Pending attrs before match: %s', self.entity_id, json.dumps(pending, ensure_ascii=False, default=str))
-            for k in list(pending):
-                if data.get(k) == pending[k]:
-                    _LOGGER.debug('%s: Matched pending attr %s=%s, removing from pending', self.entity_id, k, pending[k])
-                    self._target_attrs.pop(k, None)
-                    pending.pop(k, None)
-            if pending:
-                _LOGGER.debug('%s: IGNORING state update during transition, pending=%s, incoming_data=%s', 
-                             self.entity_id, json.dumps(pending, ensure_ascii=False, default=str),
-                             json.dumps(data, ensure_ascii=False, default=str))
-                self.target_task = asyncio.create_task(_apply_state_later())
-                return
-
         _LOGGER.debug('%s: APPLYING state update: %s', self.entity_id, json.dumps(data, ensure_ascii=False, default=str))
         super().async_set_state(data)
         if self._name in data:
@@ -210,10 +168,6 @@ class XLightEntity(XEntity, LightEntity):
         _LOGGER.debug('%s: Turn on called with: %s', self.entity_id, json.dumps(kwargs, ensure_ascii=False, default=str))
         
         kwargs[self._name] = True
-        self._target_attrs = {
-            **kwargs,
-            "time": time.time(),
-        }
         if ATTR_RGB_COLOR in kwargs:
             self._attr_color_mode = ColorMode.RGB
             _LOGGER.debug('%s: Color mode set to RGB: %s', self.entity_id, kwargs[ATTR_RGB_COLOR])
@@ -286,6 +240,4 @@ class XLightEntity(XEntity, LightEntity):
         return ret
 
     async def async_will_remove_from_hass(self):
-        if self.target_task:
-            self.target_task.cancel()
         await super().async_will_remove_from_hass()

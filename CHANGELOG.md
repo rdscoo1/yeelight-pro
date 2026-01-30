@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.6] - 2026-01-30
+
+### Fixed
+- **UI not updating color temperature after change**
+  - Root cause: color_temp values don't match exactly due to rounding in converter
+  - Example: UI sends 5161K, converter rounds to 5181K, gateway returns 5181K
+  - Comparison 5181 != 5161 failed, so update was ignored
+  - Solution: removed entire transition-blocking logic
+  - Now gateway is always trusted as source of truth
+  - Removed unused code: `target_task`, `_target_attrs`, related imports
+
 ## [0.7.5] - 2026-01-30
 
 ### Fixed
