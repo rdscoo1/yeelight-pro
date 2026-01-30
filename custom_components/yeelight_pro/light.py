@@ -14,6 +14,7 @@ from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_TEMP_KELVIN,
     ATTR_RGB_COLOR,
+    ATTR_TRANSITION,
 )
 
 from . import (
@@ -202,7 +203,8 @@ class XLightEntity(XEntity, LightEntity):
         if ret:
             self._attr_is_on = on
             _LOGGER.debug('%s: Turn %s successful, writing state', self.entity_id, 'on' if on else 'off')
-            self.async_write_ha_state()
+            if self.added:
+                self.async_write_ha_state()
         else:
             _LOGGER.warning('%s: Turn %s failed', self.entity_id, 'on' if on else 'off')
         return ret
@@ -234,7 +236,8 @@ class XLightEntity(XEntity, LightEntity):
         ret = await self.device_send_props(payload)
         if ret:
             _LOGGER.debug('%s: Prestage color temp successful', self.entity_id)
-            self.async_write_ha_state()
+            if self.added:
+                self.async_write_ha_state()
         else:
             _LOGGER.warning('%s: Prestage color temp failed', self.entity_id)
         return ret

@@ -15,5 +15,5 @@
     "custom_components.yeelight_pro.core"
   ],
   "requirements": [],
-  "version": "0.7.6"
+  "version": "0.7.7"
 }
