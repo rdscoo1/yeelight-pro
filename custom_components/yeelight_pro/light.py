@@ -146,10 +146,9 @@ class XLightEntity(XEntity, LightEntity):
         async def _apply_state_later():
             _LOGGER.debug('%s: _apply_state_later started, waiting %.2fs', self.entity_id, max(0, delay - diff) + 0.01)
             await asyncio.sleep(max(0, delay - diff) + 0.01)
-            _LOGGER.debug('%s: _apply_state_later finished waiting, clearing target_attrs', self.entity_id)
-            # Clear target_attrs to allow new updates to be processed
-            # Don't call async_write_ha_state() as it would send stale attributes
-            self._target_attrs = {}
+            _LOGGER.debug('%s: _apply_state_later finished waiting', self.entity_id)
+            # Do nothing - the state should already be updated by gateway messages
+            # Clearing _target_attrs here causes issues with subsequent updates
 
         if diff < delay and self._target_attrs:
             watched = {

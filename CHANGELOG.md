@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-01-30
+
+### Fixed
+- **State updates not being applied after transition**
+  - Removed clearing of `_target_attrs` in `_apply_state_later()`
+  - Clearing `_target_attrs` was breaking `diff` calculation (became huge number)
+  - Now `_apply_state_later()` does nothing - just waits for transition to complete
+  - Transition mechanism handles clearing pending attrs as they match incoming data
+
 ## [0.7.3] - 2026-01-30
 
 ### Fixed
