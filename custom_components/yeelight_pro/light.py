@@ -129,17 +129,27 @@ class XLightEntity(XEntity, LightEntity):
 
     @callback
     def async_set_state(self, data: dict):
+        _LOGGER.debug('%s: async_set_state called with data: %s', self.entity_id, json.dumps(data, ensure_ascii=False, default=str))
+        
         if self.target_task:
+            _LOGGER.debug('%s: Cancelling previous target_task', self.entity_id)
             self.target_task.cancel()
 
         diff = time.time() - self._target_attrs.get("time", 0)
         # Use gateway's configurable transition time, fallback to 5 seconds
         default_transition = getattr(self.device.gateway, 'transition_time', 5.0) if self.device.gateway else 5.0
         delay = float(self._target_attrs.get(ATTR_TRANSITION) or default_transition)
+        
+        _LOGGER.debug('%s: Transition check: diff=%.2fs, delay=%.2fs, target_attrs=%s', 
+                     self.entity_id, diff, delay, json.dumps(self._target_attrs, ensure_ascii=False, default=str))
 
         async def _apply_state_later():
+            _LOGGER.debug('%s: _apply_state_later started, waiting %.2fs', self.entity_id, max(0, delay - diff) + 0.01)
             await asyncio.sleep(max(0, delay - diff) + 0.01)
-            super(XLightEntity, self).async_set_state(data)
+            _LOGGER.debug('%s: _apply_state_later executing async_write_ha_state, current attrs: is_on=%s, color_temp_kelvin=%s, brightness=%s', 
+                         self.entity_id, self._attr_is_on, self._attr_color_temp_kelvin, self._attr_brightness)
+            # Don't apply stale data from closure - just refresh the UI state
+            # The actual state should already be updated by subsequent gateway messages
             self.async_write_ha_state()
 
         if diff < delay and self._target_attrs:
@@ -152,20 +162,20 @@ class XLightEntity(XEntity, LightEntity):
             pending = {
                 k: v for k, v in self._target_attrs.items() if k in watched
             }
+            _LOGGER.debug('%s: Pending attrs before match: %s', self.entity_id, json.dumps(pending, ensure_ascii=False, default=str))
             for k in list(pending):
                 if data.get(k) == pending[k]:
+                    _LOGGER.debug('%s: Matched pending attr %s=%s, removing from pending', self.entity_id, k, pending[k])
                     self._target_attrs.pop(k, None)
                     pending.pop(k, None)
             if pending:
+                _LOGGER.debug('%s: IGNORING state update during transition, pending=%s, incoming_data=%s', 
+                             self.entity_id, json.dumps(pending, ensure_ascii=False, default=str),
+                             json.dumps(data, ensure_ascii=False, default=str))
                 self.target_task = asyncio.create_task(_apply_state_later())
-                # Transition handling is working correctly, no need to log every occurrence
-                # _LOGGER.debug(
-                #     "%s: Ignore new state during transition: %s",
-                #     self.name,
-                #     [data, self._target_attrs, diff, delay],
-                # )
                 return
 
+        _LOGGER.debug('%s: APPLYING state update: %s', self.entity_id, json.dumps(data, ensure_ascii=False, default=str))
         super().async_set_state(data)
         if self._name in data:
             self._attr_is_on = data[self._name]

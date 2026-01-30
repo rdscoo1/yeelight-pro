@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-01-30
+
+### Fixed
+- **UI state jumping back** after changing color temperature on physical device
+  - Fixed `_apply_state_later()` applying stale data from closure during transition
+  - Now only refreshes UI state without overwriting with potentially outdated values
+
+### Added
+- **Enhanced debug logging** in `async_set_state` for light entities
+  - Logs incoming data, transition timing, pending attributes
+  - Logs when state updates are ignored or applied during transitions
+  - Helps diagnose state synchronization issues
+
 ## [0.7.1] - 2026-01-28
 
 ### Fixed
