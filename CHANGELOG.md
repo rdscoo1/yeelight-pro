@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-01-31
+
+### Fixed
+- **State verification now correctly reads power state** - fixed bug where `gateway_post.prop` data was expected in `params` but comes directly as `{'p': true/false}`
+- Verification now only triggers when power state is present in update (ignores brightness-only updates)
+
 ## [1.1.0] - 2026-01-31
 
 ### 🔒 Passive State Verification & Auto-Retry
