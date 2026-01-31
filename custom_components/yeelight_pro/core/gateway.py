@@ -62,6 +62,8 @@ class GatewayStatistics:
     keepalive_count: int = 0
     keepalive_success: int = 0
     keepalive_failed: int = 0
+    state_mismatches: int = 0
+    state_corrections: int = 0
     last_message_time: float = 0
     last_error: Optional[str] = None
     last_error_time: float = 0
@@ -91,6 +93,8 @@ class GatewayStatistics:
             'keepalive_total': self.keepalive_count,
             'keepalive_success': self.keepalive_success,
             'keepalive_failed': self.keepalive_failed,
+            'state_mismatches': self.state_mismatches,
+            'state_corrections': self.state_corrections,
             'last_error': self.last_error,
             'last_error_time': self.last_error_time,
         }
