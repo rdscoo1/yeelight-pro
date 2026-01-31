@@ -10,7 +10,7 @@
 
 Yeelight Pro is a custom integration for [Home Assistant](https://www.home-assistant.io/) that connects your **Yeelight Pro Gateway** and all connected devices to the Home Assistant ecosystem. It provides comprehensive control and monitoring of lights, sensors, switches, climate devices, and more through a local TCP connection.
 
-> 🧩 Originally developed by [@hasscc](https://github.com/hasscc), extensively refactored and modernized by [Roman Khodukin](https://github.com/rdscoo1) with improved stability, comprehensive diagnostics, and 100+ automated tests.
+> 🧩 Originally developed by [@hasscc](https://github.com/hasscc), extensively refactored and modernized by [@rdscoo1](https://github.com/rdscoo1) with improved stability, comprehensive diagnostics, and 100+ automated tests.
 
 ## Features
 
@@ -322,7 +322,7 @@ This repository uses GitHub Actions for:
 
 | Role | Contributor |
 |------|-------------|
-| Lead Developer | [Roman Khodukin](https://github.com/rdscoo1) |
+| Lead Developer | [@rdscoo1](https://github.com/rdscoo1) |
 | Original Integration | [@hasscc](https://github.com/hasscc) |
 | Platform | [Yeelight](https://www.yeelight.com/) |
 
