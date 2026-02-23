@@ -345,8 +345,8 @@ async def test_send_handles_drain_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_send_returns_none_when_not_connected(monkeypatch):
-    """send() должен возвращать None если не удалось подключиться."""
+async def test_send_internal_returns_none_when_not_connected(monkeypatch):
+    """_send_internal() должен возвращать None если не удалось подключиться."""
     gtw = ProGateway("1.2.3.4")
 
     async def fake_connect(self):
@@ -354,9 +354,37 @@ async def test_send_returns_none_when_not_connected(monkeypatch):
 
     monkeypatch.setattr(ProGateway, "connect", fake_connect, raising=True)
 
-    result = await gtw.send("test_method", wait_result=True)
+    # Test _send_internal directly — it checks connection before sending
+    result = await gtw._send_internal("test_method", wait_result=True)
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_send_retries_on_failure(monkeypatch):
+    """send() должен повторять попытки и возвращать None при исчерпании."""
+    gtw = ProGateway("1.2.3.4", retries=2)
+
+    attempt_count = [0]
+
+    async def fake_send_internal(*_args, **_kwargs):
+        attempt_count[0] += 1
+        return None  # Always fail
+
+    async def fake_sleep(_delay):
+        pass  # Skip actual sleep in tests
+
+    monkeypatch.setattr(gtw, "_send_internal", fake_send_internal)
+    monkeypatch.setattr(
+        "custom_components.yeelight_pro.core.gateway.asyncio.sleep",
+        fake_sleep,
+    )
+
+    result = await gtw.send("gateway_set.prop", nodes=[{"id": 1}])
+
+    assert result is None
+    assert attempt_count[0] == 2  # retries=2 → 2 attempts total
+    assert gtw.stats.commands_failed == 1
 
 
 # ---------- run_forever ----------

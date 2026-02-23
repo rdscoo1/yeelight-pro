@@ -1,6 +1,5 @@
 """Support for light."""
 import logging
-import json
 import voluptuous as vol
 
 from homeassistant.helpers import config_validation as cv
@@ -67,8 +66,6 @@ class XLightEntity(XEntity, LightEntity):
 
     def __init__(self, device: XDevice, conv: Converter, option=None):
         super().__init__(device, conv, option)
-        
-        _LOGGER.debug('Initializing light entity: device=%s, converter=%s', device.id, conv.attr)
 
         # Initialize flags first
         self._attr_supported_color_modes = set()
@@ -108,9 +105,6 @@ class XLightEntity(XEntity, LightEntity):
             self._attr_color_mode = ColorMode.BRIGHTNESS
         else:
             self._attr_color_mode = ColorMode.ONOFF
-        
-        _LOGGER.debug('Light entity initialized: supported_modes=%s, color_mode=%s, features=%s', 
-                     list(self._attr_supported_color_modes), self._attr_color_mode, self._attr_supported_features)
 
     def _clamp_ct_kelvin(self, k: int) -> int:
         lo = getattr(self, "_attr_min_color_temp_kelvin", None)
@@ -124,17 +118,6 @@ class XLightEntity(XEntity, LightEntity):
 
     @callback
     def async_set_state(self, data: dict):
-        _LOGGER.debug('%s: async_set_state called with data: %s', self.entity_id, json.dumps(data, ensure_ascii=False, default=str))
-        
-        # Always apply state updates from gateway immediately
-        # The previous transition-blocking logic caused issues:
-        # 1. color_temp values don't match exactly due to rounding in converter
-        # 2. on/off state blocked brightness/color updates
-        # 3. _apply_state_later with stale closure data caused UI to revert
-        # 
-        # Now we trust the gateway as the source of truth and always update
-        
-        _LOGGER.debug('%s: APPLYING state update: %s', self.entity_id, json.dumps(data, ensure_ascii=False, default=str))
         super().async_set_state(data)
         if self._name in data:
             self._attr_is_on = data[self._name]
@@ -142,17 +125,14 @@ class XLightEntity(XEntity, LightEntity):
             self._attr_brightness = data[ATTR_BRIGHTNESS]
         if ATTR_COLOR_TEMP_KELVIN in data:
             self._attr_color_temp_kelvin = data[ATTR_COLOR_TEMP_KELVIN]
-            # Also update mired for backward compatibility
             self._attr_color_temp = int(1_000_000 / max(1, data[ATTR_COLOR_TEMP_KELVIN]))
-            # Update color mode when color temp changes
             if ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
                 self._attr_color_mode = ColorMode.COLOR_TEMP
         if ATTR_RGB_COLOR in data:
             self._attr_rgb_color = data[ATTR_RGB_COLOR]
-            # Update color mode when RGB changes
             if ColorMode.RGB in self._attr_supported_color_modes:
                 self._attr_color_mode = ColorMode.RGB
-        
+
         # Ensure color_mode is always set
         if not self._attr_color_mode:
             if ColorMode.RGB in self._attr_supported_color_modes:
@@ -166,17 +146,12 @@ class XLightEntity(XEntity, LightEntity):
 
     async def async_turn_on(self, **kwargs):
         """Turn the entity on."""
-        _LOGGER.debug('%s: Turn on called with: %s', self.entity_id, json.dumps(kwargs, ensure_ascii=False, default=str))
-        
         kwargs[self._name] = True
         if ATTR_RGB_COLOR in kwargs:
             self._attr_color_mode = ColorMode.RGB
-            _LOGGER.debug('%s: Color mode set to RGB: %s', self.entity_id, kwargs[ATTR_RGB_COLOR])
         elif ATTR_COLOR_TEMP_KELVIN in kwargs:
             self._attr_color_mode = ColorMode.COLOR_TEMP
-            _LOGGER.debug('%s: Color mode set to COLOR_TEMP: %s K', self.entity_id, kwargs[ATTR_COLOR_TEMP_KELVIN])
         elif not self._attr_color_mode:
-            # Set default color mode based on supported modes
             if ColorMode.RGB in self._attr_supported_color_modes:
                 self._attr_color_mode = ColorMode.RGB
             elif ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
@@ -185,24 +160,19 @@ class XLightEntity(XEntity, LightEntity):
                 self._attr_color_mode = ColorMode.BRIGHTNESS
             else:
                 self._attr_color_mode = ColorMode.ONOFF
-            _LOGGER.debug('%s: Color mode set to default: %s', self.entity_id, self._attr_color_mode)
-        
+
         return await self.async_turn(kwargs[self._name], **kwargs)
 
     async def async_turn_off(self, **kwargs):
         """Turn the entity off."""
-        _LOGGER.debug('%s: Turn off called with: %s', self.entity_id, json.dumps(kwargs, ensure_ascii=False, default=str))
         return await self.async_turn(False, **kwargs)
 
     async def async_turn(self, on: bool = True, **kwargs):
         """Turn the entity on/off."""
-        _LOGGER.debug('%s: Turning %s with kwargs: %s', self.entity_id, 'on' if on else 'off', 
-                     json.dumps(kwargs, ensure_ascii=False, default=str))
         kwargs[self._name] = on
         ret = await self.device_send_props(kwargs)
         if ret:
             self._attr_is_on = on
-            _LOGGER.debug('%s: Turn %s successful, writing state', self.entity_id, 'on' if on else 'off')
             if self.added:
                 self.async_write_ha_state()
         else:
@@ -210,44 +180,27 @@ class XLightEntity(XEntity, LightEntity):
         return ret
 
     async def async_prestage_color_temp(self, **kwargs):
-        """
-        Set color temperature while the light is OFF (no power change).
-
-        Accepts ATTR_COLOR_TEMP_KELVIN.
-        """
-        _LOGGER.debug('%s: Prestage color temp called with: %s', self.entity_id, 
-                     json.dumps(kwargs, ensure_ascii=False, default=str))
+        """Set color temperature while the light is OFF (no power change)."""
         payload: dict = {}
 
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
             k = self._clamp_ct_kelvin(int(kwargs[ATTR_COLOR_TEMP_KELVIN]))
-            
+
             # Optimization: skip if color temp is already set and light is OFF
-            # This is safe because when light is OFF, temperature cannot change externally
             if self._attr_is_on is False and self._attr_color_temp_kelvin == k:
-                _LOGGER.debug('%s: Color temp already set to %s K, skipping gateway request', 
-                             self.entity_id, k)
                 return True
-            
+
             payload["color_temp"] = k
             self._attr_color_temp_kelvin = k
             self._attr_color_temp = int(1_000_000 / max(1, k))
             self._attr_color_mode = ColorMode.COLOR_TEMP
-            _LOGGER.debug('%s: Prestage color temp: %s K (clamped from %s)', 
-                         self.entity_id, k, kwargs[ATTR_COLOR_TEMP_KELVIN])
 
         if not payload:
-            _LOGGER.warning('%s: Prestage color temp: no payload generated', self.entity_id)
             return False
 
-        # send props directly; do NOT include power flag
         ret = await self.device_send_props(payload)
-        if ret:
-            _LOGGER.debug('%s: Prestage color temp successful', self.entity_id)
-            if self.added:
-                self.async_write_ha_state()
-        else:
-            _LOGGER.warning('%s: Prestage color temp failed', self.entity_id)
+        if ret and self.added:
+            self.async_write_ha_state()
         return ret
 
     async def async_will_remove_from_hass(self):

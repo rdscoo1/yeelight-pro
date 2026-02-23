@@ -6,7 +6,7 @@ import random
 import json
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Dict, Set, Union, Optional, Any, List
+from typing import TYPE_CHECKING, Callable, Dict, Set, Union, Optional, Any
 
 from .const import PID_WIFI_PANEL, DOMAIN
 from .device import XDevice, GatewayDevice, WifiPanelDevice
@@ -34,22 +34,7 @@ RETRY_DELAY_BASE = 0.5  # Base delay between retries (exponential backoff)
 # Topology cache settings
 TOPOLOGY_CACHE_TTL = 300  # 5 minutes
 
-# Command queue settings
-COMMAND_DEBOUNCE_DELAY = 0.1  # 100ms debounce for rapid commands
-
-
 @dataclass
-class CommandQueueItem:
-    """Item in the command queue."""
-    method: str
-    kwargs: Dict[str, Any]
-    future: asyncio.Future
-    retries: int = DEFAULT_RETRIES
-    device_id: Optional[Union[str, int]] = None
-    timestamp: float = field(default_factory=time.time)
-
-
-@dataclass 
 class GatewayStatistics:
     """Gateway statistics for diagnostics."""
     start_time: float = field(default_factory=time.time)
@@ -132,16 +117,7 @@ class ProGateway:
         
         # Statistics for diagnostics
         self.stats = GatewayStatistics()
-        
-        # Command queue for preventing race conditions
-        self._command_queue: asyncio.Queue[CommandQueueItem] = asyncio.Queue()
-        self._queue_processor_task: Optional[asyncio.Task] = None
-        self._command_lock = asyncio.Lock()
-        
-        # Debouncing for rapid commands (device_id -> pending command)
-        self._pending_commands: Dict[Union[str, int], CommandQueueItem] = {}
-        self._debounce_tasks: Dict[Union[str, int], asyncio.Task] = {}
-        
+
         # Topology cache
         self._topology_cache: Optional[Dict] = None
         self._topology_cache_time: float = 0
@@ -177,17 +153,8 @@ class ProGateway:
             device.hass = self.hass
         if device.id not in self.devices:
             self.devices[device.id] = device
-            self.log.info('[%s] Device added: id=%s, name=%s, type=%s', 
-                         self.host, device.id, device.name, device.type)
-            self.log.debug('[%s] Device details: %s', self.host, json.dumps({
-                'id': device.id,
-                'name': device.name,
-                'type': device.type,
-                'model': getattr(device, 'model', None),
-                'pid': getattr(device, 'pid', None),
-                'firmware': getattr(device, 'firmware_version', None),
-                'properties': device.prop
-            }, ensure_ascii=False, default=str))
+            self.log.debug('[%s] Device added: id=%s, name=%s, type=%s',
+                          self.host, device.id, device.name, device.type)
         if self not in device.gateways:
             device.gateways.append(self)
 
@@ -203,9 +170,6 @@ class ProGateway:
         self._json_error_count = 0
         self.stats = GatewayStatistics()  # Reset statistics on start
         self._msgs['ready'] = asyncio.get_running_loop().create_future()
-        
-        # Start command queue processor
-        self._queue_processor_task = asyncio.create_task(self._process_command_queue())
         
         self.main_task = asyncio.create_task(self.run_forever())
         self.log.info('[%s] Gateway starting', self.host)
@@ -226,25 +190,11 @@ class ProGateway:
         return True
 
     async def stop(self, *args: Any) -> None:
-        """Stop the gateway connection and cleanup."""
-        self.log.info('[%s] Gateway stopping', self.host)
+        """Stop the gateway connection and cleanup. Idempotent — safe to call multiple times."""
+        if self._stopping:
+            return
         self._stopping = True
-        
-        # Cancel command queue processor
-        if self._queue_processor_task and not self._queue_processor_task.done():
-            self._queue_processor_task.cancel()
-            try:
-                await self._queue_processor_task
-            except asyncio.CancelledError:
-                pass
-        self._queue_processor_task = None
-        
-        # Cancel debounce tasks
-        for task in self._debounce_tasks.values():
-            if not task.done():
-                task.cancel()
-        self._debounce_tasks.clear()
-        self._pending_commands.clear()
+        self.log.info('[%s] Gateway stopping', self.host)
         
         # Cancel keepalive task
         if self._keepalive_task and not self._keepalive_task.done():
@@ -356,8 +306,11 @@ class ProGateway:
             if self._was_connected:
                 self.stats.reconnect_count += 1
                 self._send_reconnect_notification()
-                # State reconciliation after reconnect
-                asyncio.create_task(self._reconcile_state())
+                # State reconciliation after reconnect — track the task so it is cancelled on stop()
+                if self.hass:
+                    self.hass.async_create_task(self._reconcile_state())
+                else:
+                    asyncio.get_event_loop().create_task(self._reconcile_state())
             self._was_connected = True
         return True
 
@@ -398,56 +351,18 @@ class ProGateway:
                 break
     
     async def _reconcile_state(self) -> None:
-        """Reconcile device states after reconnection."""
+        """Reconcile device states after reconnection.
+
+        Requests fresh topology which triggers prop_changed → update → async_write_ha_state
+        for all devices automatically.
+        """
         self.log.info('[%s] Reconciling device states after reconnect', self.host)
         try:
-            # Invalidate topology cache
-            self._topology_cache = None
-            self._topology_cache_time = 0
-            
-            # Request fresh topology
+            self.invalidate_topology_cache()
             await self.topology(wait_result=True)
-            
-            # Update all entities
-            for device in self.devices.values():
-                for entity in device.entities.values():
-                    if hasattr(entity, 'async_write_ha_state'):
-                        try:
-                            entity.async_write_ha_state()
-                        except Exception:
-                            pass
-            
-            self.log.info('[%s] State reconciliation complete, %d devices updated', 
-                         self.host, len(self.devices))
+            self.log.info('[%s] State reconciliation complete, %d devices', self.host, len(self.devices))
         except Exception as exc:
             self.log.warning('[%s] State reconciliation failed: %s', self.host, exc)
-    
-    async def _process_command_queue(self) -> None:
-        """Process commands from the queue sequentially."""
-        while not self._stopping:
-            try:
-                item = await asyncio.wait_for(self._command_queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
-                continue
-            except asyncio.CancelledError:
-                break
-            
-            if self._stopping:
-                if not item.future.done():
-                    item.future.cancel()
-                break
-            
-            try:
-                result = await self._send_with_retry(
-                    item.method, 
-                    item.retries,
-                    **item.kwargs
-                )
-                if not item.future.done():
-                    item.future.set_result(result)
-            except Exception as exc:
-                if not item.future.done():
-                    item.future.set_exception(exc)
     
     async def _send_with_retry(self, method: str, retries: int = DEFAULT_RETRIES, **kwargs: Any) -> Optional[Dict]:
         """Send command with retry logic."""
@@ -552,26 +467,15 @@ class ProGateway:
         
         if ack := self._msgs.get(cid):
             ack.set_result(dat)
-            # Only log response data for non-keepalive commands
-            if cmd != 'gateway_get.node' or len(nodes) > 1:
-                self.log.debug('[%s] Response received: method=%s, id=%s, data=%s', 
-                              self.host, cmd, cid, json.dumps(dat, ensure_ascii=False, default=str))
-        else:
+        elif cmd:
             self.log.debug('[%s] Message: method=%s, nodes=%d', self.host, cmd, len(nodes))
-            # Log full message data only for topology or multi-node messages
-            if is_topology or len(nodes) > 1:
-                self.log.debug('[%s] Message data: %s', self.host, json.dumps(dat, ensure_ascii=False, default=str))
 
         if is_topology and not self.device:
             if self.pid == PID_WIFI_PANEL and nodes:
                 self.device = WifiPanelDevice(nodes[0])
             else:
                 self.device = GatewayDevice(self)
-            self.log.debug('[%s] Gateway device created: %s', self.host, json.dumps({
-                'id': self.device.id,
-                'type': type(self.device).__name__,
-                'pid': self.pid
-            }, ensure_ascii=False, default=str))
+            self.log.debug('[%s] Gateway device created: type=%s', self.host, type(self.device).__name__)
             await self.add_device(self.device)
 
         if not nodes and "params" in dat:
@@ -580,7 +484,6 @@ class ProGateway:
         # Track devices in topology for stale device detection
         if is_topology:
             self.log.debug('[%s] Topology update: %d nodes', self.host, len(nodes))
-            self.log.debug('[%s] Topology nodes: %s', self.host, json.dumps(nodes, ensure_ascii=False, default=str))
             current_topology_devices: Set[Union[str, int]] = set()
             for node in nodes:
                 if nid := node.get("id"):
@@ -613,97 +516,18 @@ class ProGateway:
                 continue
 
             if cmd in ("gateway_post.prop", "device_post.prop"):
-                # Only log if there are actual property changes
-                prop_data = node.get('prop', {})
-                params_data = node.get('params', {})
-                if prop_data or params_data:
-                    log_data = {**prop_data, **params_data}
-                    self.log.debug('[%s] Property change for device %s: %s', 
-                                  self.host, nid, json.dumps(log_data, ensure_ascii=False, default=str))
                 await dvc.prop_changed(node)
             elif cmd in ("gateway_post.event", "device_post.event"):
-                event_data = node.get('event', {})
-                if event_data:
-                    self.log.debug('[%s] Event fired for device %s: %s', 
-                                  self.host, nid, json.dumps(event_data, ensure_ascii=False, default=str))
                 await dvc.event_fired(node)
 
     async def send(self, method: str, wait_result: bool = True, **kwargs: Any) -> Optional[Dict]:
-        """Send a command to the gateway via command queue with retry."""
-        # For topology and internal commands, bypass queue
+        """Send a command to the gateway with retry."""
+        # For topology and internal queries, send directly without retry
         if method in ("gateway_get.topology", "device_get.topology", "gateway_get.node"):
             return await self._send_internal(method, wait_result=wait_result, **kwargs)
-        
-        # Queue the command for sequential processing
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        item = CommandQueueItem(
-            method=method,
-            kwargs={'wait_result': wait_result, **kwargs},
-            future=future,
-            retries=self._default_retries,
-        )
-        await self._command_queue.put(item)
-        
-        try:
-            return await asyncio.wait_for(future, self.timeout * self._default_retries)
-        except asyncio.TimeoutError:
-            self.log.warning('[%s] Command %s timed out in queue', self.host, method)
-            return None
-        except asyncio.CancelledError:
-            return None
-    
-    async def send_debounced(
-        self, 
-        method: str, 
-        device_id: Union[str, int],
-        debounce_delay: float = COMMAND_DEBOUNCE_DELAY,
-        **kwargs: Any
-    ) -> Optional[Dict]:
-        """Send a command with debouncing for rapid changes."""
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        
-        # Cancel previous pending command for this device
-        if device_id in self._debounce_tasks:
-            self._debounce_tasks[device_id].cancel()
-            # Cancel the old future
-            if device_id in self._pending_commands:
-                old_item = self._pending_commands[device_id]
-                if not old_item.future.done():
-                    old_item.future.cancel()
-        
-        # Store new pending command
-        item = CommandQueueItem(
-            method=method,
-            kwargs=kwargs,
-            future=future,
-            device_id=device_id,
-        )
-        self._pending_commands[device_id] = item
-        
-        async def _debounced_send():
-            await asyncio.sleep(debounce_delay)
-            if device_id in self._pending_commands:
-                pending = self._pending_commands.pop(device_id)
-                self._debounce_tasks.pop(device_id, None)
-                try:
-                    result = await self.send(pending.method, **pending.kwargs)
-                    if not pending.future.done():
-                        pending.future.set_result(result)
-                except Exception as exc:
-                    if not pending.future.done():
-                        pending.future.set_exception(exc)
-        
-        self._debounce_tasks[device_id] = asyncio.create_task(_debounced_send())
-        
-        try:
-            return await asyncio.wait_for(future, self.timeout + debounce_delay)
-        except asyncio.TimeoutError:
-            return None
-        except asyncio.CancelledError:
-            return None
-    
+
+        return await self._send_with_retry(method, self._default_retries, wait_result=wait_result, **kwargs)
+
     async def _send_internal(self, method: str, wait_result: bool = True, **kwargs: Any) -> Optional[Dict]:
         """Internal send implementation without queue or retry."""
         if not self.writer:
@@ -726,8 +550,7 @@ class ProGateway:
             'method': method,
             **kwargs,
         }
-        self.log.debug('[%s] Send: %s', self.host, method)
-        self.log.debug('[%s] Send data: %s', self.host, json.dumps(dat, ensure_ascii=False, default=str))
+        self.log.debug('[%s] Send: %s id=%s', self.host, method, cid)
         
         try:
             self.writer.write(json.dumps(dat).encode() + MSG_SPLIT)

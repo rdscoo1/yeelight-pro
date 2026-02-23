@@ -106,8 +106,8 @@ class XDiagnosticsSensor(XEntity, SensorEntity):
     
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
-        # Start periodic update task
-        self._update_task = asyncio.create_task(self._periodic_update())
+        # Use hass.async_create_task so HA tracks the task and cancels it on unload
+        self._update_task = self.hass.async_create_task(self._periodic_update())
     
     async def async_will_remove_from_hass(self):
         if self._update_task:

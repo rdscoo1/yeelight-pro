@@ -468,3 +468,115 @@ def test_entity_id_for_gatewaydevice_and_xdevice():
     gwdev = GatewayDevice(gw)
     conv2 = Converter("scene_1", domain="button")
     assert gwdev.entity_id(conv2) == "button.yp_scene_1"
+
+
+# ---------- State verification (P0 bug regression) ----------
+
+
+def _make_light_device() -> LightDevice:
+    """Helper: create a LightDevice with a FakeHass attached."""
+    dev = LightDevice({"id": 42, "nt": NodeType.MESH, "type": DeviceType.LIGHT_WITH_COLOR_TEMP})
+    dev.hass = FakeHass()  # type: ignore[assignment]
+    return dev
+
+
+@pytest.mark.asyncio
+async def test_prop_changed_cancels_verify_task_when_state_matches():
+    """prop_changed должен отменять _verify_task, когда p совпадает с ожидаемым.
+
+    Регрессионный тест для бага: actual p=None из-за того, что код читал
+    data.get('p') вместо data.get('params', {}).get('p').
+    """
+    dev = _make_light_device()
+
+    loop = asyncio.get_running_loop()
+    cancelled = []
+
+    async def _fake_verify_later():
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    dev._verify_task = loop.create_task(_fake_verify_later())
+    # Дать задаче один тик, чтобы она стартовала и встала на await asyncio.sleep(10)
+    await asyncio.sleep(0)
+
+    dev._expected_state = {"power": True, "timestamp": 0}
+
+    # gateway_post.prop приходит с вложенным params (реальный формат сообщения)
+    node = {"id": 42, "nt": 2, "pid": 1, "params": {"p": True, "l": 80}}
+    await dev.prop_changed(node)
+
+    # Дать задаче тик, чтобы обработать CancelledError
+    await asyncio.sleep(0)
+
+    assert dev._expected_state is None, (
+        "expected_state должен быть сброшен, когда p совпадает"
+    )
+    assert cancelled, "Verify task должен был получить CancelledError"
+
+
+@pytest.mark.asyncio
+async def test_prop_changed_does_not_cancel_verify_task_when_state_mismatches():
+    """prop_changed НЕ должен отменять _verify_task, если p не совпадает."""
+    dev = _make_light_device()
+
+    loop = asyncio.get_running_loop()
+    cancelled = []
+
+    async def _fake_verify_later():
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+
+    dev._verify_task = loop.create_task(_fake_verify_later())
+    # Дать задаче стартовать
+    await asyncio.sleep(0)
+
+    dev._expected_state = {"power": True, "timestamp": 0}
+
+    # Приходит p=False — не совпадает с ожидаемым True
+    node = {"id": 42, "nt": 2, "params": {"p": False}}
+    await dev.prop_changed(node)
+
+    await asyncio.sleep(0)
+
+    # Задача должна быть жива (не отменена), expected_state не сброшен
+    assert not cancelled, "Verify task НЕ должен быть отменён при несовпадении"
+    assert dev._expected_state is not None, "expected_state должен остаться"
+
+    # Cleanup
+    dev._verify_task.cancel()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_verify_state_later_reads_params_not_root():
+    """_verify_state_later должен читать power из prop_params (params.p), не из корня prop."""
+    dev = _make_light_device()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    # prop содержит p ТОЛЬКО внутри params (как в реальности после self.prop.update(node))
+    dev.prop = {"id": 42, "nt": 2, "params": {"p": True, "l": 80}}
+    dev._expected_state = {"power": True, "timestamp": 0}
+
+    corrected = []
+    original_send = gw.send
+
+    async def tracking_send(method, params=None, wait_result=True, **kwargs):
+        corrected.append(method)
+        return await original_send(method, params=params, wait_result=wait_result, **kwargs)
+
+    gw.send = tracking_send  # type: ignore[method-assign]
+
+    # Вызываем verify сразу (attempt=0) — state совпадает, команда НЕ должна слаться
+    await dev._verify_state_later(True, "gateway_set.prop", {"id": 42, "set": {"p": True}}, attempt=0)
+
+    assert corrected == [], (
+        f"Команда коррекции НЕ должна была быть отправлена, так как state совпадает. Sent: {corrected}"
+    )

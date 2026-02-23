@@ -195,10 +195,10 @@ class XDevice:
         
         # Check if this update matches expected state from passive verification
         if self._expected_state:
-            # Data comes directly as {'p': true/false}, not nested in 'params'
             expected_power = self._expected_state.get('power')
-            actual_power = data.get('p')
-            
+            # Power state is nested inside 'params' dict from gateway messages
+            actual_power = (data.get('params') or {}).get('p')
+
             # Only verify if power state is present in update
             if actual_power is not None and actual_power == expected_power:
                 # State matched - cancel verification task
@@ -374,8 +374,8 @@ class XDevice:
                 # State was already verified and cleared by prop_changed
                 return
             
-            # Check current state - prop stores data directly, not nested in 'params'
-            actual_power = self.prop.get('p')
+            # Power state is nested inside 'params' in self.prop
+            actual_power = self.prop_params.get('p')
             
             if actual_power == expected_power:
                 # State matches now
