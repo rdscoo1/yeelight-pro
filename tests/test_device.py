@@ -457,6 +457,23 @@ async def test_gatewaydevice_add_scene_adds_sceneconv():
     assert isinstance(gwdev.converters[key], SceneConv)
 
 
+@pytest.mark.asyncio
+async def test_gatewaydevice_add_scene_is_idempotent_for_duplicate_topology():
+    gw = FakeGateway()
+    gwdev = GatewayDevice(gw)
+    gwdev.gateways.append(gw)
+
+    await gwdev.add_scene({"id": 7, "n": "Scene 7"})
+    conv = gwdev.converters["scene_7"]
+    setup_calls_after_first = len(gw.setup_entity_calls)
+
+    await gwdev.add_scene({"id": 7, "n": "Scene 7 updated"})
+
+    assert gwdev.converters["scene_7"] is conv
+    assert conv.node["n"] == "Scene 7 updated"
+    assert len(gw.setup_entity_calls) == setup_calls_after_first
+
+
 def test_entity_id_for_gatewaydevice_and_xdevice():
     # обычный XDevice
     dev = XDevice({"id": 1, "nt": NodeType.MESH, "type": DeviceType.LIGHT})

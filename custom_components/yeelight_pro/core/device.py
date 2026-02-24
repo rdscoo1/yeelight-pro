@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 from enum import IntEnum
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Coroutine, Dict, List, Optional, TYPE_CHECKING
 
 from .converters.base import (
     Converter,
@@ -357,6 +357,12 @@ class XDevice:
             return None
         return await self.gateway.send('gateway_get.node', params={'id': self.id})
 
+    def _create_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task:
+        """Create task on HA loop when available."""
+        if self.hass:
+            return self.hass.async_create_task(coro)
+        return asyncio.create_task(coro)
+
     async def _verify_state_later(self, expected_power: bool, retry_cmd: str, retry_node: dict, attempt: int = 0):
         """Passive state verification - waits for gateway_post.prop, retries if mismatch.
         
@@ -394,13 +400,14 @@ class XDevice:
                 )
                 
                 # Retry command
-                result = await self.gateway.send(retry_cmd, nodes=[retry_node])
-                if result and self.gateway:
-                    self.gateway.stats.state_corrections += 1
-                    _LOGGER.info('[%s] State correction command sent', self.id)
-                    
+                if self.gateway:
+                    result = await self.gateway.send(retry_cmd, nodes=[retry_node])
+                    if result:
+                        self.gateway.stats.state_corrections += 1
+                        _LOGGER.info('[%s] State correction command sent', self.id)
+
                     # Schedule next verification
-                    self._verify_task = asyncio.create_task(
+                    self._verify_task = self._create_task(
                         self._verify_state_later(expected_power, retry_cmd, retry_node, attempt + 1)
                     )
             else:
@@ -452,7 +459,7 @@ class XDevice:
             }
             
             # Schedule verification
-            self._verify_task = asyncio.create_task(
+            self._verify_task = self._create_task(
                 self._verify_state_later(expected_power, cmd, node)
             )
             _LOGGER.debug('[%s] Scheduled passive verification for p=%s', self.id, expected_power)
@@ -489,7 +496,12 @@ class GatewayDevice(XDevice):
     async def add_scene(self, node: dict):
         if not (nid := node.get('id')):
             return
-        self.add_converter(SceneConv(f'scene_{nid}', 'button', node=node))
+        attr = f'scene_{nid}'
+        if existing := self.converters.get(attr):
+            if isinstance(existing, SceneConv):
+                existing.node = node
+            return
+        self.add_converter(SceneConv(attr, 'button', node=node))
         await self.setup_entities()
 
     def entity_id(self, conv: Converter):

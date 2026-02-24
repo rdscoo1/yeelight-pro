@@ -6,7 +6,7 @@ import random
 import json
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Dict, Set, Union, Optional, Any
+from typing import TYPE_CHECKING, Callable, Coroutine, Dict, Set, Union, Optional, Any
 
 from .const import PID_WIFI_PANEL, DOMAIN
 from .device import XDevice, GatewayDevice, WifiPanelDevice
@@ -26,6 +26,7 @@ RECONNECT_BACKOFF_FACTOR = 2.0
 # Error thresholds
 MAX_JSON_ERRORS = 5  # Reconnect after N consecutive JSON decode errors
 KEEPALIVE_INTERVAL = 30  # Seconds between keepalive pings
+KEEPALIVE_FAILURE_THRESHOLD = 2  # Reconnect after N consecutive failed keepalive pings
 
 # Retry settings
 DEFAULT_RETRIES = 3
@@ -33,6 +34,8 @@ RETRY_DELAY_BASE = 0.5  # Base delay between retries (exponential backoff)
 
 # Topology cache settings
 TOPOLOGY_CACHE_TTL = 300  # 5 minutes
+READ_CHUNK_SIZE = 4096
+READ_BUFFER_LIMIT = 1024 * 1024
 
 @dataclass
 class GatewayStatistics:
@@ -96,7 +99,7 @@ class ProGateway:
     writer: Optional[asyncio.StreamWriter] = None
     main_task: Optional[asyncio.Task] = None
     _keepalive_task: Optional[asyncio.Task] = None
-    _stopping: bool = False
+    _stopping: bool  # initialised in __init__; class-level annotation only
 
     def __init__(self, host: str, **options: Any) -> None:
         self.host = host
@@ -114,6 +117,9 @@ class ProGateway:
         self._json_error_count: int = 0
         self._last_topology_devices: Set[Union[str, int]] = set()
         self._was_connected: bool = False
+        self._connect_lock = asyncio.Lock()
+        self._send_lock = asyncio.Lock()
+        self._background_tasks: Set[asyncio.Task] = set()
         
         # Statistics for diagnostics
         self.stats = GatewayStatistics()
@@ -165,10 +171,15 @@ class ProGateway:
 
     async def start(self) -> None:
         """Start the gateway connection."""
+        if self.main_task and not self.main_task.done():
+            self.log.debug('[%s] Gateway already running', self.host)
+            return
+
         self._stopping = False
         self._reconnect_delay = MIN_RECONNECT_DELAY
         self._json_error_count = 0
         self.stats = GatewayStatistics()  # Reset statistics on start
+        self._cancel_pending_messages(cancel_ready=True)
         self._msgs['ready'] = asyncio.get_running_loop().create_future()
         
         self.main_task = asyncio.create_task(self.run_forever())
@@ -184,6 +195,9 @@ class ProGateway:
                 await asyncio.wait_for(fut, self.timeout)
             except asyncio.TimeoutError:
                 self.log.warning('[%s] Gateway ready timeout', self.host)
+                return False
+            except asyncio.CancelledError:
+                self.log.debug('[%s] Gateway ready future cancelled', self.host)
                 return False
 
         await self.topology()
@@ -204,15 +218,14 @@ class ProGateway:
             except asyncio.CancelledError:
                 pass
         self._keepalive_task = None
+
+        await self._cancel_background_tasks()
         
         # Cancel all pending futures to avoid leaks
-        for cid, fut in list(self._msgs.items()):
-            if not fut.done():
-                fut.cancel()
-        self._msgs.clear()
+        self._cancel_pending_messages(cancel_ready=True)
         
         # Cancel main task
-        if self.main_task and not self.main_task.cancelled():
+        if self.main_task and not self.main_task.done():
             self.main_task.cancel()
             try:
                 await self.main_task
@@ -221,14 +234,7 @@ class ProGateway:
         self.main_task = None
         
         # Close connection
-        if self.writer:
-            try:
-                self.writer.close()
-                await self.writer.wait_closed()
-            except Exception:
-                pass
-            self.writer = None
-        self.reader = None
+        await self._close_connection()
         
         # Remove gateway from devices
         for device in list(self.devices.values()):
@@ -245,14 +251,15 @@ class ProGateway:
                     delay = self._reconnect_delay
                     self.log.debug('[%s] Reconnect in %.1f seconds', self.host, delay)
                     await asyncio.sleep(delay)
-                    # Exponential backoff
+                    # Branch 1 backoff: failed to connect at all.
                     self._reconnect_delay = min(
                         self._reconnect_delay * RECONNECT_BACKOFF_FACTOR,
                         MAX_RECONNECT_DELAY
                     )
                     continue
-                
-                # Reset backoff and error count on successful connection
+
+                # Successful connect: reset backoff so the *first* post-disconnect
+                # wait (Branch 2 below) always starts from MIN_RECONNECT_DELAY.
                 self._reconnect_delay = MIN_RECONNECT_DELAY
                 self._json_error_count = 0
                 
@@ -269,6 +276,26 @@ class ProGateway:
                         await self._keepalive_task
                     except asyncio.CancelledError:
                         pass
+
+                # Branch 2 backoff: was connected, then lost the connection.
+                # _reconnect_delay was reset to MIN on successful connect above,
+                # so the first wait here is always the minimum delay.
+                if not self._stopping and not self.writer:
+                    delay = self._reconnect_delay
+                    self.log.debug(
+                        '[%s] Reconnect in %.1f seconds after disconnect',
+                        self.host,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    # Re-check after sleep: stop() may have been called during the wait.
+                    # Without this guard, the backoff would advance even on clean shutdown.
+                    if self._stopping:
+                        break
+                    self._reconnect_delay = min(
+                        self._reconnect_delay * RECONNECT_BACKOFF_FACTOR,
+                        MAX_RECONNECT_DELAY,
+                    )
                 
             except asyncio.CancelledError:
                 break
@@ -293,52 +320,78 @@ class ProGateway:
 
     async def _connect(self) -> bool:
         """Internal connect implementation."""
-        if not self.writer:
+        async with self._connect_lock:
+            if self._writer_alive():
+                return True
+
             self.log.debug('[%s] Connecting to port %d', self.host, self.port)
             self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
             if not self.writer:
                 return False
+
             self.log.info('[%s] Connected successfully', self.host)
-            if fut := self._msgs.get('ready'):
-                fut.set_result(True)
-                del self._msgs['ready']
+
+            if fut := self._msgs.pop('ready', None):
+                if not fut.done():
+                    fut.set_result(True)
+
             self._update_connection_state(True)
             if self._was_connected:
                 self.stats.reconnect_count += 1
                 self._send_reconnect_notification()
-                # State reconciliation after reconnect — track the task so it is cancelled on stop()
-                if self.hass:
-                    self.hass.async_create_task(self._reconcile_state())
-                else:
-                    asyncio.get_event_loop().create_task(self._reconcile_state())
+                self._track_background_task(self._create_task(self._reconcile_state()))
             self._was_connected = True
         return True
 
     async def check_available(self) -> Optional[Exception]:
         """Check if gateway is reachable."""
+        writer: Optional[asyncio.StreamWriter] = None
         try:
-            await asyncio.wait_for(self._connect(), self.timeout)
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(self.host, self.port),
+                self.timeout,
+            )
         except Exception as exc:
-            self.log.error('[%s] Availability check failed', self.host)
+            self.log.error('[%s] Availability check failed: %s', self.host, exc)
             return exc
+        finally:
+            if writer:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
         return None
     
     async def _keepalive_loop(self) -> None:
         """Send periodic keepalive pings to detect dead connections."""
+        failures = 0
+        method = 'device_get.node' if self.pid == PID_WIFI_PANEL else 'gateway_get.node'
+
         while not self._stopping and self.writer:
             try:
                 await asyncio.sleep(self.keepalive)
                 if self._stopping or not self.writer:
                     break
-                # Send a lightweight topology request as keepalive (bypass queue for reliability)
-                result = await self._send_internal('gateway_get.node', params={'id': 0}, wait_result=True)
+                # Send a lightweight node request as keepalive.
+                result = await self._send_internal(method, params={'id': 0}, wait_result=True)
                 self.stats.keepalive_count += 1
                 if result is None:
+                    failures += 1
                     self.stats.keepalive_failed += 1
-                    self.log.warning('[%s] Keepalive failed (%d/%d), connection may be dead', 
-                                    self.host, self.stats.keepalive_failed, self.stats.keepalive_count)
-                    await self._close_connection()
-                    break
+                    self.log.warning(
+                        '[%s] Keepalive failed (%d consecutive, %d/%d total)',
+                        self.host,
+                        failures,
+                        self.stats.keepalive_failed,
+                        self.stats.keepalive_count,
+                    )
+                    if failures >= KEEPALIVE_FAILURE_THRESHOLD:
+                        await self._close_connection()
+                        break
+                    continue
+
+                failures = 0
                 self.stats.keepalive_success += 1
                 # Log keepalive success only every 10th check to reduce noise
                 if self.stats.keepalive_count % 10 == 0:
@@ -348,6 +401,7 @@ class ProGateway:
                 break
             except Exception as exc:
                 self.log.debug('[%s] Keepalive error: %s', self.host, exc)
+                await self._close_connection()
                 break
     
     async def _reconcile_state(self) -> None:
@@ -405,17 +459,34 @@ class ProGateway:
 
     async def _read_loop(self) -> None:
         """Read messages continuously until disconnect."""
+        if not self.reader:
+            return
+
         buffer = b""
         while not self._stopping:
             try:
-                chunk = await self.reader.readline()
+                chunk = await self.reader.read(READ_CHUNK_SIZE)
                 if not chunk:
+                    if buffer:
+                        self.log.debug(
+                            '[%s] Dropping %d bytes of unfinished payload on disconnect',
+                            self.host,
+                            len(buffer),
+                        )
                     self.log.warning('[%s] Connection closed by gateway', self.host)
                     break
+
                 buffer += chunk
-                if buffer.endswith(MSG_SPLIT):
-                    msg = buffer[:-len(MSG_SPLIT)]
-                    buffer = b""
+                if len(buffer) > READ_BUFFER_LIMIT:
+                    self.log.warning(
+                        '[%s] Read buffer exceeded limit (%d), forcing reconnect',
+                        self.host,
+                        READ_BUFFER_LIMIT,
+                    )
+                    break
+
+                while MSG_SPLIT in buffer:
+                    msg, buffer = buffer.split(MSG_SPLIT, 1)
                     if msg:
                         await self.on_message(msg)
             except asyncio.CancelledError:
@@ -431,16 +502,21 @@ class ProGateway:
     
     async def _close_connection(self) -> None:
         """Close the current connection."""
-        if self.writer:
+        async with self._connect_lock:
+            writer = self.writer
+            self.writer = None
+            self.reader = None
+
+        if writer:
             self.log.debug('[%s] Closing connection', self.host)
             try:
-                self.writer.close()
-                await self.writer.wait_closed()
+                writer.close()
+                await writer.wait_closed()
             except Exception:
                 pass
-            self.writer = None
             self._update_connection_state(False)
-        self.reader = None
+
+        self._cancel_pending_messages(cancel_ready=False)
 
     async def on_message(self, msg: bytes) -> None:
         """Handle incoming message from gateway."""
@@ -465,8 +541,8 @@ class ProGateway:
         self.stats.messages_received += 1
         self.stats.last_message_time = time.time()
         
-        if ack := self._msgs.get(cid):
-            ack.set_result(dat)
+        if cid is not None and self._resolve_waiter(cid, dat):
+            pass
         elif cmd:
             self.log.debug('[%s] Message: method=%s, nodes=%d', self.host, cmd, len(nodes))
 
@@ -523,60 +599,96 @@ class ProGateway:
     async def send(self, method: str, wait_result: bool = True, **kwargs: Any) -> Optional[Dict]:
         """Send a command to the gateway with retry."""
         # For topology and internal queries, send directly without retry
-        if method in ("gateway_get.topology", "device_get.topology", "gateway_get.node"):
+        if method in (
+            "gateway_get.topology",
+            "device_get.topology",
+            "gateway_get.node",
+            "device_get.node",
+        ):
             return await self._send_internal(method, wait_result=wait_result, **kwargs)
 
         return await self._send_with_retry(method, self._default_retries, wait_result=wait_result, **kwargs)
 
     async def _send_internal(self, method: str, wait_result: bool = True, **kwargs: Any) -> Optional[Dict]:
         """Internal send implementation without queue or retry."""
-        if not self.writer:
-            if not await self.connect():
-                self.log.warning('[%s] Cannot send %s: not connected', self.host, method)
-                return None
-        
-        if method in ("gateway_get.topology", "device_get.topology"):
-            cid: Union[str, int] = method.replace("_get.", "_post.")
-        else:
-            cid = random.randint(1_000_000_000, 2_147_483_647)
-        
         fut: Optional[asyncio.Future] = None
-        if wait_result:
-            fut = asyncio.get_running_loop().create_future()
-            self._msgs[cid] = fut
+        own_waiter = False
+        should_send = True
+        _close_after = False  # set inside lock, acted on after lock is released
+        cid: Union[str, int]
 
-        dat = {
-            'id': cid,
-            'method': method,
-            **kwargs,
-        }
-        self.log.debug('[%s] Send: %s id=%s', self.host, method, cid)
-        
-        try:
-            self.writer.write(json.dumps(dat).encode() + MSG_SPLIT)
-            await self.writer.drain()
-            self.stats.messages_sent += 1
-        except Exception as exc:
-            self.log.error('[%s] Send error for %s: %s', self.host, method, exc)
-            if cid in self._msgs:
-                del self._msgs[cid]
+        async with self._send_lock:
+            if not self.writer:
+                if not await self.connect():
+                    self.log.warning('[%s] Cannot send %s: not connected', self.host, method)
+                    return None
+
+            if method in ("gateway_get.topology", "device_get.topology"):
+                cid = method.replace("_get.", "_post.")
+            else:
+                cid = random.randint(1_000_000_000, 2_147_483_647)
+
+            if wait_result:
+                existing = self._msgs.get(cid)
+                if isinstance(cid, str) and existing and not existing.done():
+                    fut = existing
+                    should_send = False
+                else:
+                    fut = asyncio.get_running_loop().create_future()
+                    self._msgs[cid] = fut
+                    own_waiter = True
+
+            if should_send:
+                dat = {
+                    'id': cid,
+                    'method': method,
+                    **kwargs,
+                }
+                self.log.debug('[%s] Send: %s id=%s', self.host, method, cid)
+
+                try:
+                    self.writer.write(json.dumps(dat).encode() + MSG_SPLIT)
+                    await self.writer.drain()
+                    self.stats.messages_sent += 1
+                except Exception as exc:
+                    self.log.error('[%s] Send error for %s: %s', self.host, method, exc)
+                    if own_waiter:
+                        self._msgs.pop(cid, None)
+                    if fut and not fut.done():
+                        fut.cancel()
+                    # Do NOT await _close_connection() here — it acquires _connect_lock
+                    # which would be held under _send_lock, risking a lock-ordering issue.
+                    _close_after = True
+            else:
+                self.log.debug(
+                    '[%s] Join in-flight request: %s id=%s',
+                    self.host,
+                    method,
+                    cid,
+                )
+
+        # _send_lock is released — safe to close the connection now.
+        if _close_after:
             await self._close_connection()
             return None
 
         if not fut:
             return None
-        
+
         try:
-            await asyncio.wait_for(fut, self.timeout)
+            result = await asyncio.wait_for(fut, self.timeout)
         except asyncio.TimeoutError:
             self.log.debug('[%s] Timeout waiting for %s', self.host, method)
+            if own_waiter and not fut.done():
+                fut.cancel()
             return None
         except asyncio.CancelledError:
             return None
         finally:
-            self._msgs.pop(cid, None)
-        
-        return fut.result()
+            if own_waiter:
+                self._msgs.pop(cid, None)
+
+        return result
 
     async def topology(self, wait_result: bool = False, use_cache: bool = True) -> Optional[Dict]:
         """Request topology from gateway with optional caching."""
@@ -660,3 +772,57 @@ class ProGateway:
             )
         except Exception as exc:
             self.log.debug('[%s] Failed to send reconnect notification: %s', self.host, exc)
+
+    def _create_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task:
+        """Create a background task bound to HA loop when available."""
+        if self.hass:
+            return self.hass.async_create_task(coro)
+        return asyncio.create_task(coro)
+
+    def _track_background_task(self, task: asyncio.Task) -> None:
+        """Track a background task to guarantee cleanup on stop()."""
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _cancel_background_tasks(self) -> None:
+        """Cancel tracked background tasks."""
+        if not self._background_tasks:
+            return
+
+        tasks = list(self._background_tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
+
+    def _writer_alive(self) -> bool:
+        """Return True if writer is open and usable."""
+        if not self.writer:
+            return False
+        is_closing = getattr(self.writer, "is_closing", None)
+        if callable(is_closing):
+            return not is_closing()
+        return True
+
+    def _cancel_pending_messages(self, cancel_ready: bool) -> None:
+        """Cancel pending command futures and optionally ready future."""
+        for cid, fut in list(self._msgs.items()):
+            if cid == 'ready' and not cancel_ready:
+                continue
+            if not fut.done():
+                fut.cancel()
+            self._msgs.pop(cid, None)
+
+    def _resolve_waiter(self, cid: Union[str, int], data: Dict[str, Any]) -> bool:
+        """Resolve pending waiter if it exists and is still active.
+
+        Always pops the entry from _msgs so callers do not need to clean up,
+        including the join-in-flight path where own_waiter is False.
+        """
+        fut = self._msgs.pop(cid, None)
+        if not fut:
+            return False
+        if fut.done():
+            return False
+        fut.set_result(data)
+        return True

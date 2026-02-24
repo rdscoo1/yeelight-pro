@@ -9,6 +9,7 @@ from custom_components.yeelight_pro.core.gateway import (
     MSG_SPLIT,
     MIN_RECONNECT_DELAY,
     MAX_JSON_ERRORS,
+    KEEPALIVE_FAILURE_THRESHOLD,
 )
 from custom_components.yeelight_pro.core.const import PID_WIFI_PANEL
 from custom_components.yeelight_pro.core.device import GatewayDevice, WifiPanelDevice, XDevice
@@ -139,13 +140,49 @@ async def test_check_available_returns_exception_on_failure(monkeypatch):
     """check_available возвращает исключение при ошибке подключения."""
     gtw = ProGateway("1.2.3.4")
 
-    async def fake_connect(self):
+    async def fake_open_connection(_host, _port):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(ProGateway, "_connect", fake_connect, raising=True)
+    monkeypatch.setattr(
+        "custom_components.yeelight_pro.core.gateway.asyncio.open_connection",
+        fake_open_connection,
+    )
 
     err = await gtw.check_available()
     assert isinstance(err, RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_check_available_closes_temporary_socket(monkeypatch):
+    """check_available() закрывает тестовое TCP-соединение после проверки."""
+    gtw = ProGateway("1.2.3.4")
+
+    class FakeWriter:
+        def __init__(self):
+            self.closed = False
+            self.wait_closed_called = False
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            self.wait_closed_called = True
+
+    writer = FakeWriter()
+
+    async def fake_open_connection(_host, _port):
+        return object(), writer
+
+    monkeypatch.setattr(
+        "custom_components.yeelight_pro.core.gateway.asyncio.open_connection",
+        fake_open_connection,
+    )
+
+    err = await gtw.check_available()
+
+    assert err is None
+    assert writer.closed is True
+    assert writer.wait_closed_called is True
 
 
 # ---------- get_scene ----------
@@ -456,6 +493,35 @@ async def test_run_forever_resets_backoff_on_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_forever_waits_before_reconnect_after_disconnect(monkeypatch):
+    """После разрыва активного соединения применяется reconnect delay."""
+    gtw = ProGateway("1.2.3.4")
+    sleep_calls = []
+
+    async def fake_connect(self):
+        self.writer = DummyWriter()
+        return True
+
+    async def fake_read_loop(self):
+        self.writer = None  # emulate disconnected socket
+
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+        gtw._stopping = True
+
+    monkeypatch.setattr(ProGateway, "connect", fake_connect, raising=True)
+    monkeypatch.setattr(ProGateway, "_read_loop", fake_read_loop, raising=True)
+    monkeypatch.setattr(
+        "custom_components.yeelight_pro.core.gateway.asyncio.sleep",
+        fake_sleep,
+    )
+
+    await gtw.run_forever()
+
+    assert sleep_calls == [MIN_RECONNECT_DELAY]
+
+
+@pytest.mark.asyncio
 async def test_read_loop_handles_connection_closed():
     """_read_loop должен корректно обрабатывать закрытие соединения."""
     gtw = ProGateway("1.2.3.4")
@@ -464,7 +530,7 @@ async def test_read_loop_handles_connection_closed():
         def __init__(self):
             self.call_count = 0
 
-        async def readline(self):
+        async def read(self, _size):
             self.call_count += 1
             if self.call_count == 1:
                 return b'{"id": 1}\r\n'
@@ -488,12 +554,50 @@ async def test_read_loop_handles_connection_closed():
 
 
 @pytest.mark.asyncio
+async def test_read_loop_handles_partial_reads_and_multiple_messages(monkeypatch):
+    """_read_loop собирает partial chunks и парсит несколько сообщений подряд."""
+    gtw = ProGateway("1.2.3.4")
+    received = []
+
+    class FakeReader:
+        def __init__(self):
+            self.chunks = [
+                b'{"id": 1',
+                b'}\r\n{"id": 2}\r',
+                b"\n",
+                b"",
+            ]
+
+        async def read(self, _size):
+            return self.chunks.pop(0)
+
+    class FakeWriter:
+        def close(self):
+            pass
+
+        async def wait_closed(self):
+            pass
+
+    async def fake_on_message(msg):
+        received.append(msg)
+
+    monkeypatch.setattr(gtw, "on_message", fake_on_message)
+
+    gtw.reader = FakeReader()
+    gtw.writer = FakeWriter()
+
+    await gtw._read_loop()
+
+    assert received == [b'{"id": 1}', b'{"id": 2}']
+
+
+@pytest.mark.asyncio
 async def test_read_loop_handles_connection_error():
     """_read_loop должен корректно обрабатывать ошибки соединения."""
     gtw = ProGateway("1.2.3.4")
 
     class FakeReader:
-        async def readline(self):
+        async def read(self, _size):
             raise ConnectionError("Connection lost")
 
     class FakeWriter:
@@ -606,13 +710,47 @@ async def test_keepalive_closes_connection_on_failure(monkeypatch):
 
     gtw.writer = FakeWriter()
 
-    async def fake_send(method, **kwargs):
+    async def fake_sleep(_delay):
+        return
+
+    async def fake_send_internal(*_args, **_kwargs):
         return None  # Simulate failure
 
-    monkeypatch.setattr(gtw, "send", fake_send)
+    monkeypatch.setattr(
+        "custom_components.yeelight_pro.core.gateway.asyncio.sleep",
+        fake_sleep,
+    )
+    monkeypatch.setattr(gtw, "_send_internal", fake_send_internal)
 
     await gtw._keepalive_loop()
 
+    assert gtw.writer is None
+
+
+@pytest.mark.asyncio
+async def test_keepalive_requires_consecutive_failures(monkeypatch):
+    """Keepalive закрывает соединение только после порога подряд идущих фейлов."""
+    gtw = ProGateway("1.2.3.4", keepalive=0.01)
+    gtw.writer = DummyWriter()
+
+    attempts = {"count": 0}
+
+    async def fake_sleep(_delay):
+        return
+
+    async def fake_send_internal(*_args, **_kwargs):
+        attempts["count"] += 1
+        return None
+
+    monkeypatch.setattr(
+        "custom_components.yeelight_pro.core.gateway.asyncio.sleep",
+        fake_sleep,
+    )
+    monkeypatch.setattr(gtw, "_send_internal", fake_send_internal)
+
+    await gtw._keepalive_loop()
+
+    assert attempts["count"] == KEEPALIVE_FAILURE_THRESHOLD
     assert gtw.writer is None
 
 
@@ -666,6 +804,42 @@ async def test_topology_detects_removed_devices():
     assert device.prop.get("o") is False
 
 
+@pytest.mark.asyncio
+async def test_on_message_ignores_cancelled_waiter():
+    """Поздний ответ на отменённый future не должен ронять обработчик сообщений."""
+    gtw = ProGateway("1.2.3.4")
+    fut = asyncio.get_running_loop().create_future()
+    fut.cancel()
+    gtw._msgs[42] = fut
+
+    await gtw.on_message(b'{"id": 42}')
+
+    assert 42 not in gtw._msgs
+
+
+@pytest.mark.asyncio
+async def test_send_topology_joins_inflight_request():
+    """Повторный topology wait_result ждёт текущий future и не шлёт второй пакет."""
+    gtw = ProGateway("1.2.3.4")
+    gtw.writer = DummyWriter()
+
+    task1 = asyncio.create_task(gtw.send("gateway_get.topology", wait_result=True))
+    await asyncio.sleep(0)
+    task2 = asyncio.create_task(gtw.send("gateway_get.topology", wait_result=True))
+    await asyncio.sleep(0)
+
+    await gtw.on_message(b'{"id": "gateway_post.topology", "ok": true}')
+
+    result1 = await task1
+    result2 = await task2
+
+    assert result1 == {"id": "gateway_post.topology", "ok": True}
+    assert result2 == {"id": "gateway_post.topology", "ok": True}
+    assert len(gtw.writer.written) == 1
+    assert "gateway_post.topology" not in gtw._msgs
+
+
+
 # ---------- Properties ----------
 
 
@@ -690,3 +864,130 @@ def test_device_count_property():
 
     gtw.devices = {1: "dev1", 2: "dev2"}
     assert gtw.device_count == 2
+
+
+# ---------- Critical: _send_lock released during _close_connection ----------
+
+
+@pytest.mark.asyncio
+async def test_send_internal_releases_send_lock_before_close_connection():
+    """_send_lock должен быть освобождён до вызова _close_connection при ошибке записи."""
+    gtw = ProGateway("1.2.3.4")
+    lock_held_during_close = []
+
+    class BrokenWriter:
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            raise ConnectionError("broken pipe")
+
+        def close(self):
+            pass
+
+        async def wait_closed(self):
+            # Snapshot lock state at the moment connection is being closed
+            lock_held_during_close.append(gtw._send_lock.locked())
+
+        def is_closing(self):
+            return False
+
+    gtw.writer = BrokenWriter()  # type: ignore[assignment]
+    await gtw._send_internal("gateway_set.prop", wait_result=False)
+
+    assert lock_held_during_close == [False], (
+        "_send_lock should be released before _close_connection is awaited"
+    )
+
+
+# ---------- Important: reconnect delay must check _stopping after sleep ----------
+
+
+@pytest.mark.asyncio
+async def test_run_forever_does_not_advance_backoff_if_stopping_during_sleep(monkeypatch):
+    """После остановки во время reconnect sleep backoff-задержка не должна вырасти."""
+    gtw = ProGateway("1.2.3.4")
+
+    async def fake_connect(self):
+        self.writer = DummyWriter()
+        return True
+
+    async def fake_read_loop(self):
+        self.writer = None  # simulate unclean disconnect
+
+    async def fake_sleep(delay):
+        gtw._stopping = True  # stop() called while sleeping
+
+    monkeypatch.setattr(ProGateway, "connect", fake_connect, raising=True)
+    monkeypatch.setattr(ProGateway, "_read_loop", fake_read_loop, raising=True)
+    monkeypatch.setattr(
+        "custom_components.yeelight_pro.core.gateway.asyncio.sleep",
+        fake_sleep,
+    )
+
+    await gtw.run_forever()
+
+    from custom_components.yeelight_pro.core.gateway import MIN_RECONNECT_DELAY
+    assert gtw._reconnect_delay == MIN_RECONNECT_DELAY, (
+        "backoff should not be advanced when stopping during reconnect sleep"
+    )
+
+
+# ---------- Important: _resolve_waiter must remove entry from _msgs ----------
+
+
+@pytest.mark.asyncio
+async def test_resolve_waiter_removes_entry_from_msgs_on_success():
+    """_resolve_waiter должен удалять запись из _msgs сразу после resolve."""
+    gtw = ProGateway("1.2.3.4")
+    fut = asyncio.get_running_loop().create_future()
+    gtw._msgs[42] = fut
+
+    resolved = gtw._resolve_waiter(42, {"id": 42, "ok": True})
+
+    assert resolved is True
+    assert 42 not in gtw._msgs, "_msgs should be cleared after successful resolve"
+    assert fut.result() == {"id": 42, "ok": True}
+
+
+# ---------- Minor: keepalive failure counter resets on success ----------
+
+
+@pytest.mark.asyncio
+async def test_keepalive_resets_failure_count_on_success(monkeypatch):
+    """Провал-успех-провал: счётчик фейлов сбрасывается, реконнект не триггерится."""
+    gtw = ProGateway("1.2.3.4")
+    gtw.writer = DummyWriter()
+
+    close_calls = {"count": 0}
+    original_close = ProGateway._close_connection
+
+    async def tracking_close(self):
+        close_calls["count"] += 1
+        await original_close(self)
+
+    monkeypatch.setattr(ProGateway, "_close_connection", tracking_close, raising=True)
+
+    # fail, success, fail → 1 consecutive at end, below threshold (2) → no reconnect
+    call_idx = {"n": 0}
+    responses = [None, {"ok": True}, None]
+
+    async def fake_sleep(_delay):
+        if call_idx["n"] >= len(responses):
+            gtw._stopping = True  # stop after sequence exhausted
+
+    async def fake_send_internal(*_args, **_kwargs):
+        n = call_idx["n"]
+        call_idx["n"] += 1
+        return responses[n] if n < len(responses) else {"ok": True}
+
+    monkeypatch.setattr(
+        "custom_components.yeelight_pro.core.gateway.asyncio.sleep",
+        fake_sleep,
+    )
+    monkeypatch.setattr(gtw, "_send_internal", fake_send_internal)
+
+    await gtw._keepalive_loop()
+
+    assert call_idx["n"] >= 3
+    assert close_calls["count"] == 0, "reconnect should not fire on non-consecutive failures"

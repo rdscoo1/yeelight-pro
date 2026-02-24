@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-02-24
+
+### Fixed
+- Hardened TCP message parsing in `ProGateway` to safely handle partial reads and multi-message chunks
+- Fixed potential future-state races in `_msgs` handling (late/duplicate/cancelled responses no longer raise `InvalidStateError`)
+- Improved reconnect lifecycle after disconnects with explicit reconnect delay and safer connection closing
+- Stabilized keepalive behavior with consecutive-failure threshold to avoid false-positive reconnects
+- Fixed availability checks in config/options flow by using a temporary probe connection that is always closed
+
+### Changed
+- Added connection/send locks in gateway transport layer to reduce concurrent connect/send races
+- Tracked and cancelled background gateway tasks during stop/unload for cleaner lifecycle
+- Prevented duplicate entity add storms by introducing one-shot queueing before `async_added_to_hass`
+- Made scene topology handling idempotent to avoid duplicate scene setup on repeated topology payloads
+- Redacted gateway host values in diagnostics output
+
+### Testing
+- Added deterministic regression tests for reconnect/keepalive behavior, partial reads, cancelled waiter handling, and duplicate topology requests
+- Added tests for entity add deduplication and idempotent scene registration
+
 ## [1.1.1] - 2026-01-31
 
 ### Fixed

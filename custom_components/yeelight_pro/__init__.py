@@ -408,10 +408,18 @@ class XEntity(Entity):
         )
         self._attr_extra_state_attributes = {}
         self._vars = {}
+        self._queued_for_add = False
         self.subscribed_attrs = device.subscribe_attrs(conv)
         device.entities[conv.attr] = self
 
         _LOGGER.debug('Entity created: %s uid=%s dev=%s', conv.domain, self._attr_unique_id, device.id)
+
+    def queue_add(self, add_entities) -> None:
+        """Queue entity addition exactly once until async_added_to_hass runs."""
+        if self.added or self._queued_for_add:
+            return
+        self._queued_for_add = True
+        add_entities([self])
 
     async def async_added_to_hass(self):
         if hasattr(self, 'async_get_last_state'):
@@ -420,7 +428,17 @@ class XEntity(Entity):
                 self.async_restore_last_state(state.state, state.attributes)
 
         self.added = True
+        self._queued_for_add = False
         await super().async_added_to_hass()
+
+    async def async_will_remove_from_hass(self):
+        self.added = False
+        self._queued_for_add = False
+        # HA base Entity defines async_will_remove_from_hass as a no-op coroutine;
+        # calling super() is safe and forward-compatible.
+        parent_method = getattr(super(), "async_will_remove_from_hass", None)
+        if parent_method is not None:
+            await parent_method()
 
     @callback
     def async_restore_last_state(self, state: str, attrs: dict):

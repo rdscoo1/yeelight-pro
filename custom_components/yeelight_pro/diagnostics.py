@@ -3,11 +3,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
 
 from .core.const import DOMAIN, CONF_GATEWAYS
 from .core.gateway import ProGateway
+
+TO_REDACT = {
+    CONF_HOST,
+    "host",
+}
 
 
 async def async_get_config_entry_diagnostics(
@@ -59,4 +66,4 @@ async def async_get_config_entry_diagnostics(
             "devices": devices_info,
         }
     
-    return diagnostics_data
+    return async_redact_data(diagnostics_data, TO_REDACT)

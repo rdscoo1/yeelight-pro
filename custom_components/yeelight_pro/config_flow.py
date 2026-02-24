@@ -58,7 +58,11 @@ class YeelightProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if host := user_input.get(CONF_HOST):
             await self.async_set_unique_id(host)
             self._abort_if_unique_id_configured()
-            if gtw := await get_gateway_from_config(self.hass, user_input, renew=True):
+            check_cfg = {
+                **user_input,
+                CONF_PID: user_input.get(CONF_PID, PID_GATEWAY),
+            }
+            if gtw := await get_gateway_from_config(self.hass, check_cfg, renew=True):
                 if err := await gtw.check_available():
                     self.context['last_error'] = str(err)
                 else:
@@ -89,12 +93,19 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is None:
             user_input = {}
         if user_input.get(CONF_HOST):
-            if gtw := await get_gateway_from_config(self.hass, user_input, renew=True):
+            check_cfg = {
+                **config_entry.data,
+                **config_entry.options,
+                **user_input,
+            }
+            if gtw := await get_gateway_from_config(self.hass, check_cfg, renew=True):
                 if err := await gtw.check_available():
                     self.context['last_error'] = str(err)
                 else:
                     self.hass.config_entries.async_update_entry(
-                        config_entry, data={**config_entry.data, CONF_HOST: user_input[CONF_HOST]}
+                        config_entry,
+                        title=user_input[CONF_HOST] or config_entry.title,
+                        data={**config_entry.data, CONF_HOST: user_input[CONF_HOST]},
                     )
                     options = {
                         CONF_KEEPALIVE: user_input.get(CONF_KEEPALIVE, DEFAULT_KEEPALIVE),

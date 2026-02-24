@@ -19,7 +19,7 @@ from custom_components.yeelight_pro.core.converters.base import (
     ColorTempKelvin,
     ColorRgbConv,
 )
-from custom_components.yeelight_pro.light import XLightEntity
+from custom_components.yeelight_pro.light import XLightEntity, setuper as light_setuper
 
 
 class FakeBus:
@@ -130,6 +130,23 @@ def test_light_supported_modes_rgb_ct_transition():
 
     # transition-фича включается, если есть конвертер transition
     assert entity.supported_features & LightEntityFeature.TRANSITION
+
+
+def test_light_setuper_deduplicates_add_entities_until_added():
+    """Повторный setup до async_added_to_hass не должен повторно вызывать add_entities."""
+    added = []
+
+    def add_entities(entities):
+        added.extend(entities)
+
+    setup = light_setuper(add_entities)
+    device, conv = make_light_device()
+
+    setup(device, conv)
+    setup(device, conv)
+
+    assert len(added) == 1
+    assert added[0] is device.entities["light"]
 
 
 def test_light_supported_modes_brightness_fallback():

@@ -28,8 +28,7 @@ def setuper(add_entities):
                 entity = XGatewayUpdateEntity(device, conv)
             else:
                 entity = XUpdateEntity(device, conv)
-        if not entity.added:
-            add_entities([entity])
+        entity.queue_add(add_entities)
     return setup
 
 

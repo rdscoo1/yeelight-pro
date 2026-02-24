@@ -265,6 +265,7 @@ async def test_options_flow_init_success(monkeypatch):
     assert updated is not None
     assert updated["entry"] is entry
     assert updated["data"][CONF_HOST] == "2.3.4.5"
+    assert updated["kwargs"]["title"] == "2.3.4.5"
     # старые поля из data сохраняются, если были
     # (в данном тесте их нет, кроме host)
 

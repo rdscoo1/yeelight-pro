@@ -1,5 +1,40 @@
 # Release Notes
 
+## [1.3.0] - 2026-02-24
+
+### 🔒 Reliability & Lifecycle Hardening
+
+This release focuses on production stability for persistent TCP push operation.
+
+### ✨ What's New
+
+- Gateway transport now safely handles partial TCP reads and batched messages in one buffer
+- Gateway send/connect paths are lock-protected to reduce race conditions under concurrent calls
+- Keepalive reconnect logic now uses a consecutive-failure threshold to avoid noisy reconnects
+- Pending command waiters are resolved/cancelled safely to prevent future leaks and invalid state transitions
+- Config/options availability checks now use a temporary probe socket that is always closed
+
+### ⚡ Performance & HA Behavior
+
+- Entity setup flow now deduplicates `add_entities` until entity is actually added
+- Scene discovery from repeated topology payloads is now idempotent (no duplicate setup churn)
+- Diagnostics now redact host values before export
+
+### 🧪 Tests
+
+- Added deterministic regression coverage for:
+  - partial read parsing
+  - reconnect delay behavior after disconnect
+  - keepalive failure threshold
+  - cancelled waiter handling
+  - in-flight topology waiter deduplication
+  - entity add deduplication
+  - duplicate scene topology processing
+
+**Full Changelog**: [1.2.0...1.3.0](https://github.com/rdscoo1/yeelight-pro/compare/1.2.0...1.3.0)
+
+---
+
 ## [0.7.1] - 2026-01-28
 
 ### 🐛 Bug Fix

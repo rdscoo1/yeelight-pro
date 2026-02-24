@@ -31,8 +31,7 @@ def setuper(add_entities):
                 entity = XDiagnosticsSensor(device, conv)
             else:
                 entity = XSensorEntity(device, conv)
-        if not entity.added:
-            add_entities([entity])
+        entity.queue_add(add_entities)
     return setup
 
 

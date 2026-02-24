@@ -27,8 +27,7 @@ def setuper(add_entities):
                 entity = DelayoffEntity(device, conv)
             else:
                 entity = XNumberEntity(device, conv)
-        if not entity.added:
-            add_entities([entity])
+        entity.queue_add(add_entities)
     return setup
 
 
