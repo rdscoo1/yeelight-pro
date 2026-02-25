@@ -28,6 +28,7 @@ class FakeGateway:
         self.host = "127.0.0.1"
         self.entry_id = "test-entry"
         self.device = FakeGatewayDevice()
+        self.is_connected = True
 
 
 class FakeDevice:
@@ -156,3 +157,60 @@ def test_xaction_async_set_state_ignores_when_no_name_or_hass():
     entity.hass = None
     entity.async_set_state({"action": "tap"})
     assert entity._attr_native_value == ""
+
+
+# ---------- Fix 2: XDiagnosticsSensor must NOT block HA bootstrap ----------
+
+
+@pytest.mark.asyncio
+async def test_xdiagnostics_sensor_does_not_register_task_with_hass():
+    """_periodic_update должен создаваться через asyncio.create_task,
+    а НЕ через hass.async_create_task, чтобы не блокировать HA bootstrap.
+
+    Регрессионный тест: hass.async_create_task добавляет задачу в hass._tasks,
+    которые HA ожидает при загрузке. _periodic_update — бесконечный цикл,
+    поэтому он блокировал запуск HA на ~307 секунд.
+    """
+    from custom_components.yeelight_pro.sensor import XDiagnosticsSensor
+    from custom_components.yeelight_pro.core.device import GatewayDevice
+    from custom_components.yeelight_pro.core.converters.base import Converter
+
+    tasks_registered_with_hass = []
+
+    class TrackingHass(FakeHass):
+        def async_create_task(self, coro):
+            tasks_registered_with_hass.append(coro)
+            return self.loop.create_task(coro)
+
+    class FakeGatewayDev(GatewayDevice):
+        def __init__(self):
+            gw = FakeGateway()
+            super().__init__(gw)  # type: ignore[arg-type]
+
+    hass = TrackingHass()
+    device = FakeGatewayDev()
+    conv = Converter("diagnostics", "sensor")
+
+    entity = XDiagnosticsSensor(device, conv)
+    entity.hass = hass  # type: ignore[assignment]
+    entity.entity_id = "sensor.test_diagnostics"
+    entity.added = False
+
+    await entity.async_added_to_hass()
+
+    # Background task must NOT have been registered via hass.async_create_task
+    assert tasks_registered_with_hass == [], (
+        "_periodic_update не должен регистрироваться через hass.async_create_task "
+        "— это блокирует HA bootstrap"
+    )
+
+    # But the task should exist and be running
+    assert entity._update_task is not None
+    assert not entity._update_task.done()
+
+    # Cleanup
+    entity._update_task.cancel()
+    try:
+        await entity._update_task
+    except asyncio.CancelledError:
+        pass

@@ -105,8 +105,11 @@ class XDiagnosticsSensor(XEntity, SensorEntity):
     
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
-        # Use hass.async_create_task so HA tracks the task and cancels it on unload
-        self._update_task = self.hass.async_create_task(self._periodic_update())
+        # Use asyncio.create_task (NOT hass.async_create_task) — hass.async_create_task
+        # registers the task in hass._tasks which HA awaits during bootstrap. Since
+        # _periodic_update is an infinite loop it would block startup for ~300 s.
+        # Cleanup is handled manually in async_will_remove_from_hass.
+        self._update_task = asyncio.create_task(self._periodic_update())
     
     async def async_will_remove_from_hass(self):
         if self._update_task:

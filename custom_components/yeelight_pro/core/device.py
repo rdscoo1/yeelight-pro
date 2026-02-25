@@ -382,20 +382,41 @@ class XDevice:
             
             # Power state is nested inside 'params' in self.prop
             actual_power = self.prop_params.get('p')
-            
+
+            if actual_power is None:
+                # Device has not sent gateway_post.prop at all — state is unknown.
+                # Retrying to an unresponsive device produces log spam without benefit.
+                _LOGGER.debug(
+                    '[%s] State unconfirmed after %.1fs: device has not reported p '
+                    '(no gateway_post.prop received), skipping retry',
+                    self.id, STATE_VERIFY_TIMEOUT,
+                )
+                self._expected_state = None
+                return
+
             if actual_power == expected_power:
                 # State matches now
                 _LOGGER.debug('[%s] State verified after timeout: p=%s', self.id, actual_power)
                 self._expected_state = None
                 return
-            
+
             # State mismatch - retry
             if attempt < STATE_VERIFY_RETRIES:
+                # If a newer command changed _expected_state while this task was sleeping,
+                # our expected_power is stale. The new command's verify task will handle it.
+                current_expected = self._expected_state.get('power') if self._expected_state else None
+                if current_expected != expected_power:
+                    _LOGGER.debug(
+                        '[%s] Verify task for p=%s is stale (current expected p=%s), aborting',
+                        self.id, expected_power, current_expected,
+                    )
+                    return
+
                 if self.gateway:
                     self.gateway.stats.state_mismatches += 1
                 _LOGGER.warning(
                     '[%s] State mismatch after %.1fs: expected p=%s, actual p=%s (retry %d/%d)',
-                    self.id, STATE_VERIFY_TIMEOUT, expected_power, actual_power, 
+                    self.id, STATE_VERIFY_TIMEOUT, expected_power, actual_power,
                     attempt + 1, STATE_VERIFY_RETRIES
                 )
                 

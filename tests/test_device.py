@@ -597,3 +597,94 @@ async def test_verify_state_later_reads_params_not_root():
     assert corrected == [], (
         f"Команда коррекции НЕ должна была быть отправлена, так как state совпадает. Sent: {corrected}"
     )
+
+
+# ---------- Fix 1: actual p=None should not trigger retry ----------
+
+
+@pytest.mark.asyncio
+async def test_verify_state_later_skips_retry_when_actual_is_none():
+    """Когда actual_power is None (устройство не прислало prop), не должно быть retry-команды.
+
+    Регрессионный тест для бага: устройства без gateway_post.prop (например mesh-узлы
+    с нестабильным каналом) вызывали бесконечный спам WARNING + retry команды,
+    поскольку None != bool всегда True.
+    """
+    dev = _make_light_device()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    # prop не содержит 'p' — устройство никогда не присылало gateway_post.prop
+    dev.prop = {"id": 42, "nt": 2}  # no 'params' key at all
+    dev._expected_state = {"power": False, "timestamp": 0}
+
+    sent_commands = []
+
+    async def tracking_send(method, params=None, wait_result=True, **kwargs):
+        sent_commands.append(method)
+        return {"ok": True}
+
+    gw.send = tracking_send  # type: ignore[method-assign]
+
+    # Simulate timeout: prop_params.get('p') returns None (device never confirmed)
+    await dev._verify_state_later(False, "gateway_set.prop", {"id": 42, "set": {"p": False}}, attempt=0)
+
+    assert sent_commands == [], (
+        "Не должно быть retry-команды, когда устройство не прислало подтверждения (actual=None)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_verify_state_later_skips_retry_when_actual_is_none_on_true():
+    """Аналогично: actual p=None при expected p=True → тоже не ретраить."""
+    dev = _make_light_device()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    dev.prop = {}  # no params at all
+    dev._expected_state = {"power": True, "timestamp": 0}
+
+    sent_commands = []
+
+    async def tracking_send(method, params=None, wait_result=True, **kwargs):
+        sent_commands.append(method)
+        return {"ok": True}
+
+    gw.send = tracking_send  # type: ignore[method-assign]
+
+    await dev._verify_state_later(True, "gateway_set.prop", {"id": 42, "set": {"p": True}}, attempt=0)
+
+    assert sent_commands == []
+
+
+# ---------- Fix 3: stale verify task should not warn when expected_state changed ----------
+
+
+@pytest.mark.asyncio
+async def test_verify_state_later_skips_warning_when_expected_state_changed():
+    """Если после расписания верификации пришла новая команда и _expected_state изменился,
+    старая verify-задача не должна логировать WARNING и слать retry."""
+    dev = _make_light_device()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    # Gateway reported p=True (the NEW command succeeded)
+    dev.prop = {"id": 42, "nt": 2, "params": {"p": True}}
+
+    # OLD verify was expecting p=False, but NEW command changed expected to p=True
+    dev._expected_state = {"power": True, "timestamp": 0}  # newer command's expectation
+
+    sent_commands = []
+
+    async def tracking_send(method, params=None, wait_result=True, **kwargs):
+        sent_commands.append(method)
+        return {"ok": True}
+
+    gw.send = tracking_send  # type: ignore[method-assign]
+
+    # Old task: was verifying p=False, but _expected_state now says True
+    await dev._verify_state_later(False, "gateway_set.prop", {"id": 42, "set": {"p": False}}, attempt=0)
+
+    assert sent_commands == [], (
+        "Стale verify-задача не должна слать retry когда expected_state изменился"
+    )
