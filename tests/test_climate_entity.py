@@ -17,18 +17,12 @@ from custom_components.yeelight_pro.climate import XClimateEntity
 
 
 class FakeHass:
-    """Минимальный hass для XClimateEntity."""
+    """Мин��мальный hass для XClimateEntity."""
 
     def __init__(self, loop=None):
         self.loop = loop or asyncio.new_event_loop()
         self.loop_thread_id = threading.get_ident()
-        # только то, что нужно для climate: единицы измерения температуры
-        self.config = type(
-            "Cfg",
-            (),
-            {"units": type("U", (), {"temperature_unit": "°C"})()},
-        )()
-        # чтобы XEntity не падал, если вдруг захочет что-то писать/читать
+        self.config = type("Cfg", (), {})()
         self.bus = type("Bus", (), {"async_fire": lambda *a, **k: None})()
         self.states = type("States", (), {"async_entity_ids": lambda *a, **k: []})()
 

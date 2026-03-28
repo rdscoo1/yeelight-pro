@@ -43,7 +43,6 @@ def get_options_schema(defaults: dict):
 
 
 class YeelightProConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_PUSH
 
     @staticmethod
     @callback

@@ -3,7 +3,9 @@ from custom_components.yeelight_pro.core.device import XDevice
 from custom_components.yeelight_pro.core.gateway import ProGateway
 
 @pytest.fixture(autouse=True)
-def patch_setup_entities(monkeypatch):
+def patch_setup_entities(request, monkeypatch):
+    if "no_patch_setup" in request.keywords:
+        return
     async def _noop(self):
         return
     monkeypatch.setattr(XDevice, "setup_entities", _noop)

@@ -19,6 +19,7 @@ from homeassistant.helpers.reload import (
     async_reload_integration_platforms,
 )
 from homeassistant.components import persistent_notification
+from homeassistant.helpers import discovery
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.service import async_register_admin_service
@@ -73,7 +74,7 @@ async def async_setup(hass: HomeAssistant, hass_config: dict):
 
         await asyncio.gather(
             *[
-                hass.helpers.discovery.async_load_platform(domain, DOMAIN, gwc, gwc)
+                discovery.async_load_platform(hass, domain, DOMAIN, gwc, gwc)
                 for domain in SUPPORTED_DOMAINS
             ]
         )
@@ -376,7 +377,7 @@ class XEntity(Entity):
             if hasattr(self.hass, 'data'):
                 reg = er.async_get(self.hass)
                 existing_entity = reg.async_get_entity_id(conv.domain, DOMAIN, old_uid)
-        except Exception:
+        except (KeyError, AttributeError):
             pass
 
         # Use old unique_id if it exists in registry, otherwise use new format
@@ -394,10 +395,8 @@ class XEntity(Entity):
         if not isinstance(device, (GatewayDevice, WifiPanelDevice)):
             via_device = (DOMAIN, f"{gw_id}-{device.gateway.host}")
 
-        # Dual identifiers: old (for backward compatibility) + new (for future)
         self._attr_device_info = DeviceInfo(
             identifiers={
-                (DOMAIN, str(device.id)),
                 (DOMAIN, f"{gw_id}-{device.id}"),
             },
             name=device.name,

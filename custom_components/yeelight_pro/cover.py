@@ -65,12 +65,12 @@ class XCoverEntity(XEntity, CoverEntity, RestoreEntity):
     async def async_open_cover(self, **kwargs):
         # 打开封面：设置位置为 100（逻辑不变）
         kwargs[ATTR_POSITION] = 100
-        await self.async_set_cover_position(** kwargs)
+        await self.async_set_cover_position(**kwargs)
 
     async def async_close_cover(self, **kwargs):
         # 关闭封面：设置位置为 0（逻辑不变）
         kwargs[ATTR_POSITION] = 0
-        await self.async_set_cover_position(** kwargs)
+        await self.async_set_cover_position(**kwargs)
 
     async def async_stop_cover(self, **kwargs):
         # 停止封面：发送暂停指令（逻辑不变）

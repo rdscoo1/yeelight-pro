@@ -552,7 +552,7 @@ class LightDevice(XDevice):
         }
         if self.type == DeviceType.LIGHT_WITH_BRIGHTNESS:
             modes.add(ColorMode.BRIGHTNESS)
-        if self.type == DeviceType.LIGHT_WITH_COLOR_TEMP:
+        if self.type in (DeviceType.LIGHT_WITH_COLOR_TEMP, DeviceType.LIGHT_WITH_ZOOM_CT):
             modes.add(ColorMode.BRIGHTNESS)
             modes.add(ColorMode.COLOR_TEMP)
         if self.type == DeviceType.LIGHT_WITH_COLOR:
@@ -644,7 +644,7 @@ class MotionDevice(XDevice):
         
         # This is a presence sensor with a built-in light sensor. Its type is still defined as 129,
         # so we can only temporarily distinguish it by the `cids` value.
-        if 73 in self.cids:
+        if 73 in (self.cids or []):
             # Regular presence sensors use cids = [9], while ceiling-mounted sensors with light detection use cids = [73].
             self.add_converter(PropConv(
                     attr='luminance',

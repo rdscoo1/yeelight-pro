@@ -1,4 +1,3 @@
-import types
 import pytest
 
 from custom_components.yeelight_pro import (
@@ -17,20 +16,12 @@ from homeassistant.const import CONF_HOST
 # ---------- Вспомогательные заглушки ----------
 
 
-class FakeDiscovery:
-    def __init__(self):
-        self.calls = []
-
-    async def async_load_platform(self, domain, component, config, discovery_info=None):
-        self.calls.append((domain, component, config, discovery_info))
-
-
 class FakeHassForSetup:
     """Минимальный hass для теста async_setup."""
 
     def __init__(self):
         self.data = {}
-        self.helpers = types.SimpleNamespace(discovery=FakeDiscovery())
+        self.discovery_calls = []
 
 
 class FakeServices:
@@ -72,6 +63,7 @@ async def test_async_setup_creates_gateways_and_loads_platforms(monkeypatch):
 
     hass = FakeHassForSetup()
     created_gateway = []
+    discovery_calls = []
 
     class FakeGateway:
         def __init__(self, host, **kwargs):
@@ -85,11 +77,19 @@ async def test_async_setup_creates_gateways_and_loads_platforms(monkeypatch):
     async def fake_get_gateway_from_config(hass_, cfg, renew=False):
         return FakeGateway(cfg[CONF_HOST])
 
+    async def fake_async_load_platform(hass_, domain, component, config, discovery_info=None):
+        discovery_calls.append((domain, component, config, discovery_info))
+
     # Подменяем get_gateway_from_config и ComponentServices,
     # чтобы не тянуть реальные зависимости HA.
     monkeypatch.setattr(
         "custom_components.yeelight_pro.get_gateway_from_config",
         fake_get_gateway_from_config,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "custom_components.yeelight_pro.discovery.async_load_platform",
+        fake_async_load_platform,
         raising=True,
     )
 
@@ -122,7 +122,7 @@ async def test_async_setup_creates_gateways_and_loads_platforms(monkeypatch):
     # Проверяем, что все платформы были переданы в discovery.async_load_platform
     from custom_components.yeelight_pro.core.const import SUPPORTED_DOMAINS
 
-    called_domains = [c[0] for c in hass.helpers.discovery.calls]
+    called_domains = [c[0] for c in discovery_calls]
     for dom in SUPPORTED_DOMAINS:
         assert dom in called_domains
 

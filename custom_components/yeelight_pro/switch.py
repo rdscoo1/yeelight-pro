@@ -57,5 +57,6 @@ class XSwitchEntity(XEntity, SwitchEntity):
         ret = await self.device_send_props(kwargs)
         if ret:
             self._attr_is_on = on
-            self.async_write_ha_state()
+            if self.added:
+                self.async_write_ha_state()
         return ret

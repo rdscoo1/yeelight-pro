@@ -11,6 +11,7 @@ from homeassistant.components.climate import (
     FAN_HIGH,
 )
 from homeassistant.components.climate.const import HVACMode
+from homeassistant.const import UnitOfTemperature
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from . import (
@@ -66,7 +67,7 @@ class XClimateEntity(XEntity, ClimateEntity, RestoreEntity):
 
         self._attr_hvac_mode = HVACMode.OFF
         self._attr_fan_mode = None
-        self._attr_temperature_unit = self.hass.config.units.temperature_unit
+        self._attr_temperature_unit = UnitOfTemperature.CELSIUS
         self._attr_target_temperature_step = 1
 
     # Mapping from decoded attribute names to local state variables

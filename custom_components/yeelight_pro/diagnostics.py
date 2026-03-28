@@ -63,6 +63,7 @@ async def async_get_config_entry_diagnostics(
             "devices_count": gtw.device_count,
             "last_topology_devices": list(gtw._last_topology_devices),
             "setups_registered": list(gtw.setups.keys()),
+            "statistics": gtw.stats.to_dict(),
             "devices": devices_info,
         }
     

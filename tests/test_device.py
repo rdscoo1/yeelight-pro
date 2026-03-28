@@ -325,8 +325,12 @@ def test_lightdevice_color_modes_by_type_and_converters():
     assert ColorMode.RGB in d3.color_modes
     assert "rgb_color" in d3.converters
 
-    # LIGHT_WITH_ZOOM_CT добавляет angel
+    # LIGHT_WITH_ZOOM_CT has brightness + color_temp + angel
     d4 = LightDevice({"id": 5, "nt": NodeType.MESH, "type": DeviceType.LIGHT_WITH_ZOOM_CT})
+    assert ColorMode.BRIGHTNESS in d4.color_modes
+    assert ColorMode.COLOR_TEMP in d4.color_modes
+    assert "brightness" in d4.converters
+    assert "color_temp" in d4.converters
     assert "angel" in d4.converters
 
 
@@ -348,6 +352,19 @@ def test_motiondevice_adds_luminance_for_cids_73():
     assert isinstance(lum, PropConv)
     assert lum.unit_of_measurement == "lx"
     assert lum.device_class == "illuminance"
+
+
+def test_motiondevice_handles_none_cids():
+    """MotionDevice must not crash when node has no 'cids' key."""
+    node = {
+        "id": 1,
+        "nt": NodeType.MESH,
+        "type": DeviceType.MOTION_SENSOR,
+        # no 'cids' key at all
+    }
+    dev = MotionDevice(node)
+    assert "motion" in dev.converters
+    assert "luminance" not in dev.converters
 
 
 def test_contactdevice_converters():
