@@ -36,7 +36,7 @@ from homeassistant.components.climate.const import (
 _LOGGER = logging.getLogger(__name__)
 
 # Passive state verification settings
-STATE_VERIFY_TIMEOUT = 1.5  # Seconds to wait for gateway_post.prop before retry
+STATE_VERIFY_TIMEOUT = 2.5  # Seconds to wait for gateway_post.prop before retry
 STATE_VERIFY_RETRIES = 2  # Number of retry attempts on state mismatch
 
 
@@ -79,11 +79,35 @@ DEVICE_TYPE_LIGHTS = [
 ]
 
 
-class XDevice:
-    hass: "HomeAssistant" = None
-    converters: Dict[str, Converter] = None
+def _build_device_type_map():
+    """Lazy-built registry mapping DeviceType to device class.
 
+    Built on first call (after all classes are defined) to avoid forward-reference issues.
+    """
+    return {
+        DeviceType.LIGHT: LightDevice,
+        DeviceType.LIGHT_WITH_BRIGHTNESS: LightDevice,
+        DeviceType.LIGHT_WITH_COLOR_TEMP: LightDevice,
+        DeviceType.LIGHT_WITH_COLOR: LightDevice,
+        DeviceType.LIGHT_WITH_ZOOM_CT: LightDevice,
+        DeviceType.SWITCH_PANEL: SwitchPanelDevice,
+        DeviceType.RELAY_DOUBLE: RelayDoubleDevice,
+        DeviceType.SWITCH_SENSOR: KnobDevice,
+        DeviceType.KNOB: KnobDevice,
+        DeviceType.MOTION_SENSOR: MotionDevice,
+        DeviceType.MOTION_WITH_LIGHT: MotionDevice,
+        DeviceType.MAGNET_SENSOR: ContactDevice,
+        DeviceType.CURTAIN: CoverDevice,
+        DeviceType.AIR_CONDITIONER: ClimateDevice,
+    }
+
+
+_DEVICE_TYPE_MAP = None
+
+
+class XDevice:
     def __init__(self, node: dict):
+        self.hass: Optional["HomeAssistant"] = None
         self.id = int(node['id'])
         self.nt = node.get('nt', 0)
         self.pid = node.get('pid')
@@ -94,7 +118,7 @@ class XDevice:
         self.prop = {}
         self.entities: Dict[str, "XEntity"] = {}
         self.gateways: List["ProGateway"] = []
-        self.converters = {}
+        self.converters: Dict[str, Converter] = {}
         self.setup_converters()
         
         # Passive state verification
@@ -139,31 +163,22 @@ class XDevice:
             if 'prop' in node:
                 dvc.prop.update(node['prop'])
         else:
-            dvc = XDevice(node)
-            if dvc.nt in [NodeType.SCENE]:
+            nt = node.get('nt', 0)
+            dtype = node.get('type', 0)
+
+            if nt in (NodeType.SCENE,):
                 if isinstance(gateway.device, GatewayDevice):
                     await gateway.device.add_scene(node)
                 return gateway.device
-            elif dvc.nt in [NodeType.GROUP, NodeType.MRSH_GROUP]:
+
+            global _DEVICE_TYPE_MAP
+            if _DEVICE_TYPE_MAP is None:
+                _DEVICE_TYPE_MAP = _build_device_type_map()
+
+            if nt in (NodeType.GROUP, NodeType.MRSH_GROUP):
                 dvc = GroupDevice(node)
-            elif dvc.type in DEVICE_TYPE_LIGHTS:
-                dvc = LightDevice(node)
-            elif dvc.type in [DeviceType.SWITCH_PANEL]:
-                dvc = SwitchPanelDevice(node)
-            elif dvc.type in [DeviceType.RELAY_DOUBLE]:
-                dvc = RelayDoubleDevice(node)
-            elif dvc.type in [DeviceType.SWITCH_SENSOR]:
-                dvc = KnobDevice(node)                  
-            elif dvc.type in [DeviceType.KNOB]:
-                dvc = KnobDevice(node)
-            elif dvc.type in [DeviceType.MOTION_SENSOR, DeviceType.MOTION_WITH_LIGHT]:
-                dvc = MotionDevice(node)
-            elif dvc.type in [DeviceType.MAGNET_SENSOR]:
-                dvc = ContactDevice(node)
-            elif dvc.type in [DeviceType.CURTAIN]:
-                dvc = CoverDevice(node)
-            elif dvc.type in [DeviceType.AIR_CONDITIONER]:
-                dvc = ClimateDevice(node)
+            elif cls := _DEVICE_TYPE_MAP.get(dtype):
+                dvc = cls(node)
             else:
                 _LOGGER.warning('Unsupported device: %s', node)
                 return None
@@ -530,8 +545,8 @@ class GatewayDevice(XDevice):
 
 
 class LightDevice(XDevice):
-    def setup_converters(self):
-        super().setup_converters()
+    def _setup_light_converters(self):
+        """Shared light converter setup used by LightDevice and GroupDevice."""
         self.add_converter(PropBoolConv('light', 'light', prop='p'))
         self.add_converter(DurationConv('delay', parent='light'))
         self.add_converter(DurationConv('delayoff', 'number', readable=False))
@@ -542,6 +557,10 @@ class LightDevice(XDevice):
             self.add_converter(ColorTempKelvin('color_temp', prop='ct', parent='light'))
         if ColorMode.RGB in self.color_modes:
             self.add_converter(ColorRgbConv('rgb_color', prop='c', parent='light'))
+
+    def setup_converters(self):
+        super().setup_converters()
+        self._setup_light_converters()
         if self.type == DeviceType.LIGHT_WITH_ZOOM_CT:
             self.add_converter(PropConv('angel', 'number'))
 
@@ -722,22 +741,13 @@ class ClimateDevice(XDevice):
         # aco: Whether the air conditioner is online (air conditioner online status)
 
 
-class GroupDevice(XDevice):
+class GroupDevice(LightDevice):
     """Device representing a group of lights from the gateway."""
     
     def __init__(self, node: dict):
         super().__init__(node)
         self.member_ids = node.get('cids') or []
         self.name = node.get('n') or f'Group {self.id}'
-
-    def setup_converters(self):
-        super().setup_converters()
-        self.add_converter(PropBoolConv('light', 'light', prop='p'))
-        self.add_converter(DurationConv('delay', parent='light'))
-        self.add_converter(DurationConv('delayoff', 'number', readable=False))
-        self.add_converter(DurationConv('transition', prop='duration', parent='light'))
-        self.add_converter(BrightnessConv('brightness', prop='l', parent='light'))
-        self.add_converter(ColorTempKelvin('color_temp', prop='ct', parent='light'))
 
     @property
     def color_modes(self):

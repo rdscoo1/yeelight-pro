@@ -1,8 +1,11 @@
+import logging
 from dataclasses import dataclass
 from typing import Any, Optional, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..device import XDevice
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -93,14 +96,16 @@ class BrightnessConv(PropConv):
     def decode(self, device, payload, value: int):
         try:
             v = max(0, min(int(self.max), int(value)))
-        except Exception:
+        except (TypeError, ValueError) as exc:
+            _LOGGER.warning('BrightnessConv.decode: invalid value %r: %s', value, exc)
             v = 0
         payload[self.attr] = round(v / float(self.max) * 255)
 
     def encode(self, device, payload, value: float):
         try:
             v = max(0, min(255, int(value)))
-        except Exception:
+        except (TypeError, ValueError) as exc:
+            _LOGGER.warning('BrightnessConv.encode: invalid value %r: %s', value, exc)
             v = 0
         dev_v = round(v / 255.0 * float(self.max))
         super().encode(device, payload, int(dev_v))
@@ -120,7 +125,8 @@ class ColorTempKelvin(PropConv):
         """Accept mired or kelvin and send Kelvin to device."""
         try:
             v = int(value)
-        except Exception:
+        except (TypeError, ValueError) as exc:
+            _LOGGER.warning('ColorTempKelvin.encode: invalid value %r: %s', value, exc)
             return
         if v <= 1000:  # likely mired from HA
             k = int(1_000_000 / max(1, v))
@@ -140,7 +146,8 @@ class ColorRgbConv(PropConv):
     def encode(self, device, payload, value: tuple):
         try:
             r, g, b = (int(value[0]), int(value[1]), int(value[2]))
-        except Exception:
+        except (TypeError, ValueError, IndexError) as exc:
+            _LOGGER.warning('ColorRgbConv.encode: invalid value %r: %s', value, exc)
             r = g = b = 0
         r = max(0, min(255, r))
         g = max(0, min(255, g))
