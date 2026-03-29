@@ -1,6 +1,5 @@
 """The component."""
 import json
-import ast
 import logging
 import asyncio
 import voluptuous as vol
@@ -127,6 +126,20 @@ async def async_add_setuper(hass: HomeAssistant, config, domain, setuper):
         gtw.add_setup(domain, setuper)
 
 
+def platform_setup_factory(entity_domain: str, setuper_fn):
+    """Generate async_setup_entry and async_setup_platform for a platform.
+
+    Eliminates identical boilerplate across all 9 entity platform modules.
+    """
+    async def async_setup_entry(hass, config_entry, async_add_entities):
+        await async_add_setuper(hass, config_entry, entity_domain, setuper_fn(async_add_entities))
+
+    async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+        await async_add_setuper(hass, config or discovery_info, entity_domain, setuper_fn(async_add_entities))
+
+    return async_setup_entry, async_setup_platform
+
+
 async def get_gateway_from_config(hass, config, renew=False):
     if isinstance(config, ConfigEntry):
         cfg = {
@@ -231,7 +244,7 @@ class ComponentServices:
         rdt = dat.get("result")
 
         try:
-            ret = await gtw.send(method, params, True)
+            ret = await gtw.send(method, wait_result=True, params=params)
         except Exception as err:  # noqa: BLE001
             rdt = repr(err)
         else:
@@ -272,20 +285,22 @@ class ComponentServices:
             return False
         message = dat['message']
 
-        # 兼容python字典打印复制
         try:
             msg = json.loads(message)
-        except json.JSONDecodeError:
-            try:
-                msg = ast.literal_eval(message)
-            except (ValueError, SyntaxError):
-                msg = None
+        except (json.JSONDecodeError, TypeError) as exc:
+            title = 'Yeelight Pro mock incoming message'
+            err_info = f'❌ Invalid JSON: {exc}\n\n'
+            err_info += f'Input: {message}\n\n'
+            err_info += '✅ Example: {"id": 8218, "method": "gateway_post.event", "nodes": [{"params": {}, "value": "motion.false", "id": 301809111, "nt": 2}]}\n'
+            persistent_notification.async_create(
+                self.hass, err_info, title=title, notification_id=f'{DOMAIN}-debug',
+            )
+            return False
                 
         if not isinstance(msg, dict):
             title = 'Yeelight Pro mock incoming message'
-            err_info = f'❌ Format error: {message}\n\n'
-            err_info += '''✅JSON: {"id": 8218, "method": "gateway_post.event", "nodes": [{"params": {}, "value": "motion.false", "id": 301809111, "nt": 2}]}\n'''
-            err_info += '''✅PYTHON: {'id': 8218, 'method': 'gateway_post.event', 'nodes': [{'params': {}, 'value': 'motion.false', 'id': 301809111, 'nt': 2}]}\n'''
+            err_info = f'❌ Expected a JSON object, got {type(msg).__name__}\n\n'
+            err_info += '✅ Example: {"id": 8218, "method": "gateway_post.event", "nodes": [{"params": {}, "value": "motion.false", "id": 301809111, "nt": 2}]}\n'
             persistent_notification.async_create(
                 self.hass, err_info, title=title, notification_id=f'{DOMAIN}-debug',
             )

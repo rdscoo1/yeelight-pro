@@ -14,7 +14,7 @@ from . import (
     XDevice,
     XEntity,
     Converter,
-    async_add_setuper,
+    platform_setup_factory,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,22 +31,7 @@ def setuper(add_entities):
     return setup
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    await async_add_setuper(
-        hass,
-        config_entry,
-        ENTITY_DOMAIN,
-        setuper(async_add_entities),
-    )
-
-
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    await async_add_setuper(
-        hass,
-        config or discovery_info,
-        ENTITY_DOMAIN,
-        setuper(async_add_entities),
-    )
+async_setup_entry, async_setup_platform = platform_setup_factory(ENTITY_DOMAIN, setuper)
 
 
 class XNumberEntity(XEntity, NumberEntity):
@@ -60,7 +45,7 @@ class XNumberEntity(XEntity, NumberEntity):
             self._attr_native_step = conv.step
 
     def _coerce(self, value: float):
-        """Привести значение к шагу и диапазону min/max."""
+        """Coerce value to step and min/max range."""
         try:
             v = float(value)
         except (TypeError, ValueError):
@@ -80,7 +65,7 @@ class XNumberEntity(XEntity, NumberEntity):
 
     @callback
     def async_set_state(self, data: dict):
-        """Обновление состояния из данных устройства."""
+        """Update state from device data."""
         super().async_set_state(data)
         if self._name in data:
             coerced = self._coerce(data[self._name])
@@ -88,7 +73,7 @@ class XNumberEntity(XEntity, NumberEntity):
                 self._attr_native_value = coerced
 
     async def async_set_native_value(self, value: float):
-        """Установка значения через number.set_value."""
+        """Set value via number.set_value service."""
         value = self._coerce(value)
         if value is None:
             return False
@@ -100,14 +85,14 @@ class XNumberEntity(XEntity, NumberEntity):
 
 
 class DelayoffEntity(XNumberEntity):
-    """Специальная сущность delayoff: секунды до выключения, временно отображаются."""
+    """Delay-off entity: seconds until turn-off, displayed temporarily."""
 
     _attr_mode = NumberMode.BOX
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     clear_task: asyncio.Task | None = None
 
     async def async_set_native_value(self, value: float):
-        """Отправляет delayoff + включает свет, потом очищает отображаемое значение."""
+        """Send delayoff + turn on light, then clear displayed value."""
         if self.clear_task:
             self.clear_task.cancel()
 
@@ -119,15 +104,15 @@ class DelayoffEntity(XNumberEntity):
 
         if ret := await self.device_send_props(payload):
             self._attr_native_value = value
-            # запоминаем последнее установленное значение
+            # Store the last set value
             self._attr_extra_state_attributes["latest_value"] = value
             self.async_write_ha_state()
-            # планируем очистку состояния
+            # Schedule state clear
             self.clear_task = self.hass.async_create_task(self.clear_state())
         return ret
 
     async def clear_state(self):
-        """Через секунду очищает текущее значение (UI флаг)."""
+        """Clear current value after a delay (UI flag)."""
         await asyncio.sleep(1)
         self._attr_native_value = None
         self.async_write_ha_state()

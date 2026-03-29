@@ -15,7 +15,7 @@ from . import (
     XDevice,
     XEntity,
     Converter,
-    async_add_setuper,
+    platform_setup_factory,
 )
 from .core.device import GatewayDevice
 
@@ -35,12 +35,7 @@ def setuper(add_entities):
     return setup
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    await async_add_setuper(hass, config_entry, ENTITY_DOMAIN, setuper(async_add_entities))
-
-
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    await async_add_setuper(hass, config or discovery_info, ENTITY_DOMAIN, setuper(async_add_entities))
+async_setup_entry, async_setup_platform = platform_setup_factory(ENTITY_DOMAIN, setuper)
 
 
 class XSensorEntity(XEntity, SensorEntity, RestoreEntity):
@@ -72,7 +67,7 @@ class XActionEntity(XEntity, SensorEntity):
 
         self._attr_native_value = data[self._name]
         self._attr_extra_state_attributes = data
-        self.clear_task = asyncio.create_task(self.clear_state())
+        self.clear_task = self.hass.async_create_task(self.clear_state())
         _LOGGER.debug('%s: State changed: %s', self.entity_id, data)
 
     async def clear_state(self):

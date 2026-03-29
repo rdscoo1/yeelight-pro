@@ -18,7 +18,7 @@ from . import (
     XDevice,
     XEntity,
     Converter,
-    async_add_setuper,
+    platform_setup_factory,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,12 +32,7 @@ def setuper(add_entities):
     return setup
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    await async_add_setuper(hass, config_entry, ENTITY_DOMAIN, setuper(async_add_entities))
-
-
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    await async_add_setuper(hass, config or discovery_info, ENTITY_DOMAIN, setuper(async_add_entities))
+async_setup_entry, async_setup_platform = platform_setup_factory(ENTITY_DOMAIN, setuper)
 
 
 class XClimateEntity(XEntity, ClimateEntity, RestoreEntity):

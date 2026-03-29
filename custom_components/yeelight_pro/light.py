@@ -25,6 +25,11 @@ from . import (
 
 _LOGGER = logging.getLogger(__name__)
 
+_PRESTAGE_SCHEMA = {
+    vol.Required(ATTR_COLOR_TEMP_KELVIN): vol.Coerce(int),
+    **cv.ENTITY_SERVICE_FIELDS,
+}
+
 
 def setuper(add_entities):
     def setup(device: XDevice, conv: Converter):
@@ -34,30 +39,20 @@ def setuper(add_entities):
     return setup
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    await async_add_setuper(hass, config_entry, ENTITY_DOMAIN, setuper(async_add_entities))
+async def _setup_and_register_service(hass, config, async_add_entities):
+    await async_add_setuper(hass, config, ENTITY_DOMAIN, setuper(async_add_entities))
     platform = async_get_current_platform()
     platform.async_register_entity_service(
-        "prestage_color_temp",
-        {
-            vol.Required(ATTR_COLOR_TEMP_KELVIN): vol.Coerce(int),
-            **cv.ENTITY_SERVICE_FIELDS,
-        },
-        "async_prestage_color_temp",
+        "prestage_color_temp", _PRESTAGE_SCHEMA, "async_prestage_color_temp",
     )
+
+
+async def async_setup_entry(hass, config_entry, async_add_entities):
+    await _setup_and_register_service(hass, config_entry, async_add_entities)
 
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    await async_add_setuper(hass, config or discovery_info, ENTITY_DOMAIN, setuper(async_add_entities))
-    platform = async_get_current_platform()
-    platform.async_register_entity_service(
-        "prestage_color_temp",
-        {
-            vol.Required(ATTR_COLOR_TEMP_KELVIN): vol.Coerce(int),
-            **cv.ENTITY_SERVICE_FIELDS,
-        },
-        "async_prestage_color_temp",
-    )
+    await _setup_and_register_service(hass, config or discovery_info, async_add_entities)
 
 
 class XLightEntity(XEntity, LightEntity):
