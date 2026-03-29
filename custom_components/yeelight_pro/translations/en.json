@@ -24,6 +24,7 @@
         "description": "{tip}",
         "data": {
           "host": "Host",
+          "port": "Port (default: 65443)",
           "keepalive": "Keepalive interval (seconds)",
           "transition_time": "Light transition time (seconds)"
         }

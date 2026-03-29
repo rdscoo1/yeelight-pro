@@ -24,6 +24,7 @@
         "description": "{tip}",
         "data": {
           "host": "网关IP",
+          "port": "端口（默认：65443）",
           "keepalive": "心跳间隔（秒）",
           "transition_time": "灯光过渡时间（秒）"
         }

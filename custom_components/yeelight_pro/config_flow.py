@@ -9,10 +9,14 @@ from .core.const import (
     DOMAIN,
     DEFAULT_NAME,
     CONF_PID,
+    CONF_PORT,
     CONF_KEEPALIVE,
     CONF_TRANSITION_TIME,
     PID_GATEWAY,
     GATEWAY_TYPES,
+    DEFAULT_PORT,
+    MIN_PORT,
+    MAX_PORT,
     DEFAULT_KEEPALIVE,
     MIN_KEEPALIVE,
     MAX_KEEPALIVE,
@@ -31,6 +35,10 @@ def get_flow_schema(defaults: dict):
 def get_options_schema(defaults: dict):
     return {
         vol.Required(CONF_HOST, default=defaults.get(CONF_HOST, '')): str,
+        vol.Optional(
+            CONF_PORT,
+            default=defaults.get(CONF_PORT, DEFAULT_PORT)
+        ): vol.All(vol.Coerce(int), vol.Range(min=MIN_PORT, max=MAX_PORT)),
         vol.Optional(
             CONF_KEEPALIVE,
             default=defaults.get(CONF_KEEPALIVE, DEFAULT_KEEPALIVE)
@@ -107,6 +115,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                         data={**config_entry.data, CONF_HOST: user_input[CONF_HOST]},
                     )
                     options = {
+                        CONF_PORT: user_input.get(CONF_PORT, DEFAULT_PORT),
                         CONF_KEEPALIVE: user_input.get(CONF_KEEPALIVE, DEFAULT_KEEPALIVE),
                         CONF_TRANSITION_TIME: user_input.get(CONF_TRANSITION_TIME, DEFAULT_TRANSITION_TIME),
                     }

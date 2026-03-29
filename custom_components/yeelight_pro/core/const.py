@@ -3,8 +3,13 @@ DEFAULT_NAME = 'Yeelight Pro'
 
 CONF_GATEWAYS = 'gateways'
 CONF_PID = 'pid'
+CONF_PORT = 'port'
 CONF_KEEPALIVE = 'keepalive'
 CONF_TRANSITION_TIME = 'transition_time'
+
+DEFAULT_PORT = 65443
+MIN_PORT = 1
+MAX_PORT = 65535
 
 DEFAULT_KEEPALIVE = 30
 MIN_KEEPALIVE = 10
