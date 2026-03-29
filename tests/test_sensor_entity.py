@@ -214,3 +214,187 @@ async def test_xdiagnostics_sensor_does_not_register_task_with_hass():
         await entity._update_task
     except asyncio.CancelledError:
         pass
+
+
+# ---------- XDiagnosticsSensor: periodic update, cleanup, format_uptime ----------
+
+
+def _make_diagnostics_entity():
+    """Helper to create an XDiagnosticsSensor with fake gateway diagnostics."""
+    from custom_components.yeelight_pro.sensor import XDiagnosticsSensor
+    from custom_components.yeelight_pro.core.device import GatewayDevice
+    from custom_components.yeelight_pro.core.converters.base import Converter
+
+    class FakeGatewayForDiag:
+        host = "10.0.0.1"
+        entry_id = "entry-diag"
+        device = type("D", (), {"id": "gw-0"})()
+        is_connected = True
+        diagnostics = {
+            'connected': True,
+            'success_rate': 100,
+            'device_count': 3,
+            'uptime_seconds': 3661,
+            'messages_sent': 50,
+            'messages_received': 120,
+            'commands_success': 45,
+            'commands_failed': 2,
+            'commands_retried': 1,
+            'reconnect_count': 0,
+            'keepalive_total': 10,
+            'keepalive_success': 10,
+            'keepalive_failed': 0,
+            'last_error': None,
+            'transition_time': 5.0,
+            'topology_cache_age': 42.0,
+        }
+
+    class FakeGatewayDev(GatewayDevice):
+        def __init__(self):
+            super().__init__(FakeGatewayForDiag())  # type: ignore[arg-type]
+
+    loop = asyncio.get_event_loop()
+    hass = FakeHass(loop)
+    device = FakeGatewayDev()
+    device._gateway_ref = FakeGatewayForDiag()
+    conv = Converter("diagnostics", "sensor")
+
+    entity = XDiagnosticsSensor(device, conv)
+    entity.hass = hass  # type: ignore[assignment]
+    entity.entity_id = "sensor.test_diagnostics"
+    entity.added = False
+    return entity
+
+
+def test_update_diagnostics_sets_ok_when_connected():
+    """_update_diagnostics sets native_value='OK' when connected and success_rate >= 95."""
+    entity = _make_diagnostics_entity()
+    entity._update_diagnostics()
+
+    assert entity._attr_native_value == "OK"
+    assert entity._attr_extra_state_attributes['connected'] is True
+    assert entity._attr_extra_state_attributes['device_count'] == 3
+    assert entity._attr_extra_state_attributes['messages_sent'] == 50
+
+
+def test_update_diagnostics_sets_degraded():
+    """_update_diagnostics sets 'Degraded' when success_rate is between 80 and 95."""
+    entity = _make_diagnostics_entity()
+    entity.device._gateway_ref.diagnostics['success_rate'] = 90
+    entity._update_diagnostics()
+
+    assert entity._attr_native_value == "Degraded"
+
+
+def test_update_diagnostics_sets_poor():
+    """_update_diagnostics sets 'Poor' when success_rate < 80."""
+    entity = _make_diagnostics_entity()
+    entity.device._gateway_ref.diagnostics['success_rate'] = 50
+    entity._update_diagnostics()
+
+    assert entity._attr_native_value == "Poor"
+
+
+def test_update_diagnostics_sets_disconnected():
+    """_update_diagnostics sets 'Disconnected' when not connected."""
+    entity = _make_diagnostics_entity()
+    entity.device._gateway_ref.diagnostics['connected'] = False
+    entity._update_diagnostics()
+
+    assert entity._attr_native_value == "Disconnected"
+
+
+def test_update_diagnostics_no_gateway():
+    """_update_diagnostics sets 'No Gateway' when _gateway_ref is missing."""
+    entity = _make_diagnostics_entity()
+    entity.device._gateway_ref = None
+    entity._update_diagnostics()
+
+    assert entity._attr_native_value == "No Gateway"
+
+
+def test_format_uptime_seconds():
+    from custom_components.yeelight_pro.sensor import XDiagnosticsSensor
+    assert XDiagnosticsSensor._format_uptime(45) == "45s"
+
+
+def test_format_uptime_minutes():
+    from custom_components.yeelight_pro.sensor import XDiagnosticsSensor
+    assert XDiagnosticsSensor._format_uptime(125) == "2m 5s"
+
+
+def test_format_uptime_hours():
+    from custom_components.yeelight_pro.sensor import XDiagnosticsSensor
+    assert XDiagnosticsSensor._format_uptime(3661) == "1h 1m"
+
+
+def test_format_uptime_days():
+    from custom_components.yeelight_pro.sensor import XDiagnosticsSensor
+    assert XDiagnosticsSensor._format_uptime(90061) == "1d 1h"
+
+
+@pytest.mark.asyncio
+async def test_periodic_update_calls_update_diagnostics(monkeypatch):
+    """_periodic_update should call _update_diagnostics after sleep."""
+    entity = _make_diagnostics_entity()
+    monkeypatch.setattr(entity, "async_write_ha_state", lambda: None)
+
+    call_count = 0
+    original = entity._update_diagnostics
+
+    def tracking_update():
+        nonlocal call_count
+        call_count += 1
+        original()
+
+    monkeypatch.setattr(entity, "_update_diagnostics", tracking_update)
+
+    # Patch sleep to return immediately once, then cancel
+    sleep_count = 0
+    original_sleep = asyncio.sleep
+
+    async def fast_sleep(duration):
+        nonlocal sleep_count
+        sleep_count += 1
+        if sleep_count >= 2:
+            raise asyncio.CancelledError
+        await original_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    try:
+        await entity._periodic_update()
+    except asyncio.CancelledError:
+        pass
+
+    assert call_count >= 1, "_update_diagnostics should have been called at least once"
+
+
+@pytest.mark.asyncio
+async def test_async_will_remove_cancels_update_task():
+    """async_will_remove_from_hass should cancel _update_task cleanly."""
+    entity = _make_diagnostics_entity()
+
+    async def _forever():
+        try:
+            await asyncio.sleep(999)
+        except asyncio.CancelledError:
+            raise
+
+    entity._update_task = asyncio.get_event_loop().create_task(_forever())
+    await asyncio.sleep(0)  # let task start
+
+    await entity.async_will_remove_from_hass()
+
+    assert entity._update_task.done()
+
+
+def test_async_set_state_triggers_update():
+    """async_set_state should call _update_diagnostics."""
+    entity = _make_diagnostics_entity()
+    entity._attr_native_value = "initial"
+
+    entity.async_set_state({})
+
+    # After async_set_state, diagnostics should be refreshed from gateway
+    assert entity._attr_native_value == "OK"

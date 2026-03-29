@@ -219,6 +219,6 @@ async def test_async_mock_incoming_message_invalid_json_creates_notification(mon
     assert result is False
     # Убедимся, что нотификация создалась
     assert created["hass"] is hass
-    assert "Format error" in created["message"]
+    assert "Invalid JSON" in created["message"]
     assert created["title"] == "Yeelight Pro mock incoming message"
     assert created["notification_id"].endswith("-debug")

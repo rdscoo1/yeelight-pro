@@ -258,7 +258,7 @@ async def test_options_flow_init_success(monkeypatch):
     # Создана entry с keepalive опцией
     assert result["type"] == "create_entry"
     assert result["title"] == ""
-    assert result["data"] == {"keepalive": 30, "transition_time": 5.0}
+    assert result["data"] == {"port": 65443, "keepalive": 30, "transition_time": 5.0}
 
     # Проверяем, что конфиг-энтри обновился
     updated = hass.config_entries.updated

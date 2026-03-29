@@ -705,3 +705,154 @@ async def test_verify_state_later_skips_warning_when_expected_state_changed():
     assert sent_commands == [], (
         "Стale verify-задача не должна слать retry когда expected_state изменился"
     )
+
+
+# ---------- Expanded state verification tests ----------
+
+
+@pytest.mark.asyncio
+async def test_verify_state_later_retries_on_mismatch():
+    """When actual power mismatches expected, _verify_state_later should send a retry command
+    and increment gateway stats counters."""
+    from custom_components.yeelight_pro.core.gateway import GatewayStatistics
+
+    dev = _make_light_device()
+    gw = FakeGateway()
+    gw.stats = GatewayStatistics()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    # Device reported p=False, but we expected p=True → mismatch
+    dev.prop = {"id": 42, "nt": 2, "params": {"p": False}}
+    dev._expected_state = {"power": True, "timestamp": 0}
+
+    retry_node = {"id": 42, "set": {"p": True}}
+    await dev._verify_state_later(True, "gateway_set.prop", retry_node, attempt=0)
+
+    # Should have sent a retry command
+    assert len(gw.sent) == 1
+    method, _params, _wait, kwargs = gw.sent[0]
+    assert method == "gateway_set.prop"
+    assert kwargs.get("nodes") == [retry_node]
+
+    # Stats should be updated
+    assert gw.stats.state_mismatches == 1
+    assert gw.stats.state_corrections == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_state_later_exhausts_retries():
+    """After STATE_VERIFY_RETRIES attempts, should log error and clear _expected_state."""
+    from custom_components.yeelight_pro.core.device import STATE_VERIFY_RETRIES
+
+    dev = _make_light_device()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    dev.prop = {"params": {"p": False}}
+    dev._expected_state = {"power": True, "timestamp": 0}
+
+    retry_node = {"id": 42, "set": {"p": True}}
+    # Call with attempt == STATE_VERIFY_RETRIES (exhausted)
+    await dev._verify_state_later(True, "gateway_set.prop", retry_node, attempt=STATE_VERIFY_RETRIES)
+
+    # No retry command should be sent — retries exhausted
+    assert gw.sent == []
+    # _expected_state should be cleared
+    assert dev._expected_state is None
+
+
+@pytest.mark.asyncio
+async def test_set_prop_schedules_verification_for_power_command():
+    """set_prop should schedule a verification task when power state is being set."""
+    dev = _make_light_device()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    assert dev._verify_task is None
+    assert dev._expected_state is None
+
+    await dev.set_prop(set={"p": True})
+
+    # Verification task should be scheduled
+    assert dev._verify_task is not None
+    assert not dev._verify_task.done()
+    assert dev._expected_state is not None
+    assert dev._expected_state['power'] is True
+
+    # Cleanup
+    dev._verify_task.cancel()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_set_prop_does_not_schedule_verification_without_power():
+    """set_prop should NOT schedule verification when no power state is set."""
+    dev = _make_light_device()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    await dev.set_prop(set={"l": 50})
+
+    assert dev._verify_task is None
+    assert dev._expected_state is None
+
+
+@pytest.mark.asyncio
+async def test_set_prop_cancels_previous_verification():
+    """set_prop should cancel a previous verification task before scheduling a new one."""
+    dev = _make_light_device()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    # First command: turn on
+    await dev.set_prop(set={"p": True})
+    first_task = dev._verify_task
+    assert first_task is not None
+
+    # Second command: turn off — should cancel first task
+    await dev.set_prop(set={"p": False})
+    second_task = dev._verify_task
+    assert second_task is not None
+    assert second_task is not first_task
+
+    # First task should be cancelled
+    await asyncio.sleep(0)
+    assert first_task.cancelled()
+
+    # Expected state should reflect the latest command
+    assert dev._expected_state['power'] is False
+
+    # Cleanup
+    second_task.cancel()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_set_prop_no_verification_when_verify_false():
+    """set_prop with verify=False should not schedule verification."""
+    dev = _make_light_device()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    await dev.set_prop(set={"p": True}, verify=False)
+
+    assert dev._verify_task is None
+    assert dev._expected_state is None
+
+
+@pytest.mark.asyncio
+async def test_set_prop_no_verification_when_send_fails():
+    """set_prop should not schedule verification when gateway.send returns None."""
+    dev = _make_light_device()
+
+    class FailGateway(FakeGateway):
+        async def send(self, method, params=None, wait_result=True, **kwargs):
+            return None
+
+    gw = FailGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    await dev.set_prop(set={"p": True})
+
+    assert dev._verify_task is None
+    assert dev._expected_state is None
