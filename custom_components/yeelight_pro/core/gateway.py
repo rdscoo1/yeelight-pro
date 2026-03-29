@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Coroutine, Dict, Set, Union, Optional, Any
 
-from .const import PID_WIFI_PANEL, DOMAIN
+from .const import PID_WIFI_PANEL, DOMAIN, DEFAULT_PORT
 from .device import XDevice, GatewayDevice, WifiPanelDevice
 from .converters.base import Converter
 
@@ -92,7 +92,7 @@ class ProGateway:
     """Yeelight Pro Gateway TCP client."""
     
     host: str
-    port: int = 65443
+    port: int = DEFAULT_PORT
     device: Optional[XDevice] = None
 
     reader: Optional[asyncio.StreamReader] = None
@@ -103,6 +103,7 @@ class ProGateway:
 
     def __init__(self, host: str, **options: Any) -> None:
         self.host = host
+        self.port = int(options.get('port', DEFAULT_PORT))
         self.pid: int = options.get('pid', 1)
         self.hass: Optional[HomeAssistant] = options.get('hass')
         self.timeout: float = options.get('timeout', 5)
@@ -740,6 +741,31 @@ class ProGateway:
         """Return number of devices."""
         return len(self.devices)
     
+    @property
+    def stopping(self) -> bool:
+        """Return True if gateway is in the process of stopping."""
+        return self._stopping
+
+    @property
+    def reconnect_delay(self) -> float:
+        """Return current reconnect backoff delay."""
+        return self._reconnect_delay
+
+    @property
+    def json_error_count(self) -> int:
+        """Return consecutive JSON decode error count."""
+        return self._json_error_count
+
+    @property
+    def pending_message_count(self) -> int:
+        """Return number of pending command futures."""
+        return len(self._msgs)
+
+    @property
+    def last_topology_device_ids(self) -> set:
+        """Return device IDs from the last topology response."""
+        return set(self._last_topology_devices)
+
     @property
     def diagnostics(self) -> Dict[str, Any]:
         """Return diagnostics data."""
