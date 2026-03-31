@@ -79,6 +79,55 @@ def make_action_entity():
     return entity
 
 
+def test_xentity_uses_config_entry_unique_id_for_stable_child_identity():
+    """Changing gateway host should not re-key child entities or devices."""
+    from custom_components.yeelight_pro.core.const import DOMAIN
+    from custom_components.yeelight_pro.core.device import GatewayDevice
+
+    class StableGateway(FakeGateway):
+        def __init__(self):
+            super().__init__()
+            self.host = "127.0.0.2"
+            self.entry_id = "entry-new"
+            self.config_entry = type("ConfigEntry", (), {"unique_id": "127.0.0.1"})()
+            self.device = GatewayDevice(self)
+            self.device.gateways.append(self)
+
+    loop = asyncio.get_event_loop()
+    hass = FakeHass(loop)
+    device = FakeDevice(hass)
+    device.gateway = StableGateway()
+
+    entity = XSensorEntity(device, Converter("temperature", "sensor"))
+
+    assert entity._attr_unique_id == "127.0.0.1-dev-1-temperature"
+    assert entity._attr_device_info["identifiers"] == {(DOMAIN, "127.0.0.1-dev-1")}
+    assert entity._attr_device_info["via_device"] == (DOMAIN, "127.0.0.1-127.0.0.1")
+
+
+def test_xentity_uses_config_entry_unique_id_for_gateway_identity():
+    """Gateway entities should keep the original registry identity after host changes."""
+    from custom_components.yeelight_pro.core.const import DOMAIN
+    from custom_components.yeelight_pro.core.device import GatewayDevice
+
+    class StableGateway(FakeGateway):
+        def __init__(self):
+            super().__init__()
+            self.host = "127.0.0.2"
+            self.entry_id = "entry-new"
+            self.config_entry = type("ConfigEntry", (), {"unique_id": "127.0.0.1"})()
+
+    gateway = StableGateway()
+    gateway_device = GatewayDevice(gateway)
+    gateway.device = gateway_device
+    gateway_device.gateways.append(gateway)
+
+    entity = XSensorEntity(gateway_device, Converter("diagnostics", "sensor"))
+
+    assert entity._attr_unique_id == "127.0.0.1-127.0.0.1-diagnostics"
+    assert entity._attr_device_info["identifiers"] == {(DOMAIN, "127.0.0.1-127.0.0.1")}
+
+
 def test_xsensor_async_set_state_sets_native_and_attr():
     """XSensorEntity.async_set_state должен проставлять native_value и extra native_value."""
     entity = make_sensor_entity()

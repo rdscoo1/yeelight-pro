@@ -106,6 +106,7 @@ class ProGateway:
         self.port = int(options.get('port', DEFAULT_PORT))
         self.pid: int = options.get('pid', 1)
         self.hass: Optional[HomeAssistant] = options.get('hass')
+        self.config_entry = options.get('config_entry')
         self.timeout: float = options.get('timeout', 5)
         self.keepalive: float = options.get('keepalive', KEEPALIVE_INTERVAL)
         self.entry_id: Optional[str] = options.get('entry_id')
@@ -221,6 +222,11 @@ class ProGateway:
         self._keepalive_task = None
 
         await self._cancel_background_tasks()
+
+        for device in list(self.devices.values()):
+            cancel_verify = getattr(device, "async_cancel_verify_task", None)
+            if cancel_verify is not None:
+                await cancel_verify()
         
         # Cancel all pending futures to avoid leaks
         self._cancel_pending_messages(cancel_ready=True)
@@ -563,7 +569,8 @@ class ProGateway:
             self.log.debug('[%s] Topology update: %d nodes', self.host, len(nodes))
             current_topology_devices: Set[Union[str, int]] = set()
             for node in nodes:
-                if nid := node.get("id"):
+                nid = node.get("id")
+                if nid is not None:
                     current_topology_devices.add(nid)
             
             # Detect removed devices (P1.5)
@@ -582,12 +589,15 @@ class ProGateway:
 
         for node in nodes:
             nid = node.get("id")
-            if not nid:
+            if nid is None:
                 continue
             if is_topology:
-                await XDevice.from_node(self, node)
+                dvc = await XDevice.from_node(self, node)
+            else:
+                dvc = None
 
-            dvc = self.devices.get(nid)
+            if not dvc:
+                dvc = self.device if nid == 0 else self.devices.get(nid)
             if not dvc:
                 self.log.debug('[%s] Device not found for node: %s', self.host, nid)
                 continue

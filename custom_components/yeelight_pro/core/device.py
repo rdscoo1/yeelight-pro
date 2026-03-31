@@ -137,7 +137,8 @@ class XDevice:
 
     @staticmethod
     async def from_node(gateway: "ProGateway", node: dict):
-        if not (nid := node.get('id')):
+        nid = node.get('id')
+        if nid is None:
             return None
         
         # Handle gateway node (id=0, nt=GATEWAY) to update firmware version
@@ -218,9 +219,7 @@ class XDevice:
             if actual_power is not None and actual_power == expected_power:
                 # State matched - cancel verification task
                 _LOGGER.debug('[%s] State verified via gateway_post.prop: p=%s', self.id, actual_power)
-                if self._verify_task and not self._verify_task.done():
-                    self._verify_task.cancel()
-                self._expected_state = None
+                await self.async_cancel_verify_task()
 
     async def event_fired(self, data: dict):
         decoded = self.decode_event(data)
@@ -378,6 +377,20 @@ class XDevice:
             return self.hass.async_create_task(coro)
         return asyncio.create_task(coro)
 
+    async def async_cancel_verify_task(self, clear_expected: bool = True) -> None:
+        """Cancel the pending verification task, if any."""
+        task = self._verify_task
+        self._verify_task = None
+        if clear_expected:
+            self._expected_state = None
+        if not task or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     async def _verify_state_later(self, expected_power: bool, retry_cmd: str, retry_node: dict, attempt: int = 0):
         """Passive state verification - waits for gateway_post.prop, retries if mismatch.
         
@@ -388,6 +401,8 @@ class XDevice:
         Zero overhead: no additional gateway requests, uses existing gateway_post.prop messages.
         """
         try:
+            current_task = asyncio.current_task()
+            owns_retry_chain = current_task is not None and self._verify_task is current_task
             await asyncio.sleep(STATE_VERIFY_TIMEOUT)
             
             # If we reach here, timeout occurred without state update
@@ -407,12 +422,16 @@ class XDevice:
                     self.id, STATE_VERIFY_TIMEOUT,
                 )
                 self._expected_state = None
+                if owns_retry_chain:
+                    self._verify_task = None
                 return
 
             if actual_power == expected_power:
                 # State matches now
                 _LOGGER.debug('[%s] State verified after timeout: p=%s', self.id, actual_power)
                 self._expected_state = None
+                if owns_retry_chain:
+                    self._verify_task = None
                 return
 
             # State mismatch - retry
@@ -442,16 +461,19 @@ class XDevice:
                         self.gateway.stats.state_corrections += 1
                         _LOGGER.info('[%s] State correction command sent', self.id)
 
-                    # Schedule next verification
-                    self._verify_task = self._create_task(
-                        self._verify_state_later(expected_power, retry_cmd, retry_node, attempt + 1)
-                    )
+                    # Only continue the retry chain when this coroutine is the tracked task.
+                    if owns_retry_chain:
+                        self._verify_task = self._create_task(
+                            self._verify_state_later(expected_power, retry_cmd, retry_node, attempt + 1)
+                        )
             else:
                 _LOGGER.error(
                     '[%s] State verification failed after %d retries: expected p=%s, actual p=%s',
                     self.id, STATE_VERIFY_RETRIES, expected_power, actual_power
                 )
                 self._expected_state = None
+                if owns_retry_chain:
+                    self._verify_task = None
                 
         except asyncio.CancelledError:
             # Task was cancelled by prop_changed - state matched
@@ -485,8 +507,7 @@ class XDevice:
         # Schedule passive verification if enabled and power state is being set
         if verify and result and expected_power is not None:
             # Cancel previous verification if exists
-            if self._verify_task and not self._verify_task.done():
-                self._verify_task.cancel()
+            await self.async_cancel_verify_task()
             
             # Store expected state
             self._expected_state = {

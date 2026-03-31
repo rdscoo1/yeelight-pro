@@ -828,6 +828,26 @@ async def test_set_prop_cancels_previous_verification():
 
 
 @pytest.mark.asyncio
+async def test_cancel_verify_task_clears_pending_verification():
+    """Explicit cleanup should cancel and clear the pending verification task."""
+    dev = _make_light_device()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    await dev.set_prop(set={"p": True})
+
+    verify_task = dev._verify_task
+    assert verify_task is not None
+    assert dev._expected_state is not None
+
+    await dev.async_cancel_verify_task()
+
+    assert dev._verify_task is None
+    assert dev._expected_state is None
+    assert verify_task.cancelled()
+
+
+@pytest.mark.asyncio
 async def test_set_prop_no_verification_when_verify_false():
     """set_prop with verify=False should not schedule verification."""
     dev = _make_light_device()

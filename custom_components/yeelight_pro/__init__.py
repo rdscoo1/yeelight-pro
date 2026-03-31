@@ -324,8 +324,17 @@ class ComponentServices:
             if gip and gtw.host != gip:
                 continue
             
-            host_or_entry = gtw.entry_id or gtw.host
             current_device_ids = set(gtw.devices.keys())
+            gateway_identity_keys = {
+                str(key)
+                for key in (
+                    getattr(getattr(gtw, "device", None), "id", None),
+                    gtw.host,
+                    gtw.entry_id,
+                    _gateway_registry_key(gtw),
+                )
+                if key is not None
+            }
             
             for device_entry in dr.async_entries_for_config_entry(
                 device_registry, gtw.entry_id
@@ -334,14 +343,18 @@ class ComponentServices:
                     if identifier[0] != DOMAIN:
                         continue
                     device_uid = identifier[1]
-                    device_id_part = device_uid.replace(f"{host_or_entry}-", "")
+                    device_id_part = device_uid
+                    for prefix in (_gateway_registry_key(gtw), gtw.host, gtw.entry_id):
+                        if prefix and device_uid.startswith(f"{prefix}-"):
+                            device_id_part = device_uid[len(prefix) + 1:]
+                            break
                     
                     try:
                         device_id = int(device_id_part)
                     except ValueError:
                         device_id = device_id_part
                     
-                    if device_id == gtw.host:
+                    if str(device_id) in gateway_identity_keys:
                         continue
                     
                     if device_id not in current_device_ids:
@@ -367,6 +380,32 @@ class ComponentServices:
         
         return {'removed': removed_devices, 'count': len(removed_devices)}
         
+def _gateway_registry_key(gateway) -> str:
+    """Return the stable registry identity for a gateway."""
+    if gateway is None:
+        return "gw"
+
+    config_entry = getattr(gateway, "config_entry", None)
+    unique_id = getattr(config_entry, "unique_id", None)
+    if unique_id:
+        return str(unique_id)
+
+    if getattr(gateway, "host", None):
+        return str(gateway.host)
+
+    if getattr(gateway, "entry_id", None):
+        return str(gateway.entry_id)
+
+    return "gw"
+
+
+def _device_registry_key(device, gateway_key: str) -> str:
+    """Return the stable registry identity component for a device."""
+    if isinstance(device, GatewayDevice):
+        return gateway_key
+    return str(device.id)
+
+
 class XEntity(Entity):
     added = False
     _attr_should_poll = False
@@ -379,12 +418,13 @@ class XEntity(Entity):
         self._attr_available = device.online if device.online is not None else True
         self._attr_name = f'{device.name} {conv.attr}'.strip()
 
-        # Prefer gateway host over entry_id for better stability across reinstalls
-        gw_id = getattr(device.gateway, "host", "gw")
+        gateway = device.gateway
+        gw_id = _gateway_registry_key(gateway)
+        device_registry_key = _device_registry_key(device, gw_id)
 
         # Check if old unique_id exists in registry - if so, use it to avoid duplicates
         old_uid = f"{device.id}-{self._name}"
-        new_uid = f"{gw_id}-{device.id}-{self._name}"
+        new_uid = f"{gw_id}-{device_registry_key}-{self._name}"
 
         # Try to check registry for existing entity (may not be available in tests)
         existing_entity = None
@@ -408,11 +448,13 @@ class XEntity(Entity):
 
         via_device = None
         if not isinstance(device, (GatewayDevice, WifiPanelDevice)):
-            via_device = (DOMAIN, f"{gw_id}-{device.gateway.host}")
+            parent_device = getattr(gateway, "device", None)
+            parent_registry_key = _device_registry_key(parent_device, gw_id) if parent_device else gw_id
+            via_device = (DOMAIN, f"{gw_id}-{parent_registry_key}")
 
         self._attr_device_info = DeviceInfo(
             identifiers={
-                (DOMAIN, f"{gw_id}-{device.id}"),
+                (DOMAIN, f"{gw_id}-{device_registry_key}"),
             },
             name=device.name,
             model=device.pid or device.type or '',

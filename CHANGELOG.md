@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] - 2026-03-31
+
+### Fixed
+- Preserved Home Assistant registry identity when the gateway host changes by deriving device and entity identifiers from the config entry unique ID
+- Prevented `remove_stale_devices` from misclassifying live devices or the gateway itself when identifiers use legacy host-based or stable unique-ID-based prefixes
+- Cancelled pending passive state verification tasks during cleanup to avoid lingering retry tasks on unload, reload, and shutdown
+- Restored gateway node handling for `id=0` messages so gateway firmware and name updates are applied from topology and prop payloads
+
+### Testing
+- Added regressions for host-change identity stability, stale-device cleanup identifier parsing, gateway `id=0` routing, and verification-task cleanup
+
 ## [1.3.0] - 2026-02-24
 
 ### Fixed

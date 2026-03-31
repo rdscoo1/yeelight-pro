@@ -1,5 +1,41 @@
 # Release Notes
 
+## [1.3.4] - 2026-03-31
+
+### Patch Release: Identity & Gateway Fixes
+
+This patch release focuses on safe recovery from gateway IP changes and a few lifecycle bugs that could leave Home Assistant with stale or duplicated registry state.
+
+### Fixed
+
+- **Stable registry identity when the hub IP changes**
+  - Entity and device registry identifiers now follow the config entry unique ID instead of the mutable current host
+  - Updating the gateway IP after a router or DHCP change no longer re-keys the whole device tree
+
+- **Safer stale-device cleanup**
+  - `remove_stale_devices` now understands both legacy host-based identifiers and the new stable identifier format
+  - The gateway device itself is explicitly protected from accidental removal during cleanup
+
+- **Verification task lifecycle cleanup**
+  - Pending passive state verification tasks are now cancelled during gateway shutdown/unload
+  - Fixes lingering retry tasks detected by the test suite
+
+- **Gateway node `id=0` routing restored**
+  - Gateway topology and prop messages with `id=0` are processed correctly again
+  - Gateway firmware/name updates now propagate to Home Assistant entities as expected
+
+### Tests
+
+- Added regression coverage for:
+  - host-change identity stability
+  - stale-device cleanup across old and new identifier formats
+  - gateway `id=0` topology and prop updates
+  - verification-task cancellation during cleanup
+
+**Full Changelog**: [1.3.3...1.3.4](https://github.com/rdscoo1/yeelight-pro/compare/v1.3.3...v1.3.4)
+
+---
+
 ## [1.3.0] - 2026-02-24
 
 ### 🔒 Reliability & Lifecycle Hardening

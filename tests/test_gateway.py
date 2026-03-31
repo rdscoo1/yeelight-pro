@@ -255,6 +255,45 @@ async def test_on_message_creates_gateway_device(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_on_message_updates_existing_gateway_device_from_zero_id_topology():
+    """Gateway topology nodes with id=0 should update the existing gateway device."""
+    gtw = ProGateway("1.2.3.4")
+    gtw.device = GatewayDevice(gtw)
+    gtw.devices[gtw.device.id] = gtw.device
+
+    topo = {
+        "method": "gateway_post.topology",
+        "nodes": [
+            {"id": 0, "nt": -1, "n": "Gateway Renamed", "prop": {"fv": "2.0.1"}},
+        ],
+    }
+
+    await gtw.on_message(json.dumps(topo).encode("utf-8"))
+
+    assert gtw.device.name == "Gateway Renamed"
+    assert gtw.device.firmware_version == "2.0.1"
+
+
+@pytest.mark.asyncio
+async def test_on_message_routes_zero_id_prop_to_gateway_device():
+    """gateway_post.prop with id=0 should resolve to the gateway device."""
+    gtw = ProGateway("1.2.3.4")
+    gtw.device = GatewayDevice(gtw)
+    gtw.devices[gtw.device.id] = gtw.device
+
+    prop_msg = {
+        "method": "gateway_post.prop",
+        "nodes": [
+            {"id": 0, "nt": -1, "fv": "3.1.4"},
+        ],
+    }
+
+    await gtw.on_message(json.dumps(prop_msg).encode("utf-8"))
+
+    assert gtw.device.firmware_version == "3.1.4"
+
+
+@pytest.mark.asyncio
 async def test_on_message_creates_device_for_pid_wifi_panel(monkeypatch):
     """
     При pid=PID_WIFI_PANEL на topology-сообщении создаётся какое-то устройство

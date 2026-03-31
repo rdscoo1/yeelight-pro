@@ -160,9 +160,10 @@ class FakeDeviceRegistry:
 class StaleGateway(ProGateway):
     """ProGateway stub with a real devices dict for remove_stale_devices tests."""
 
-    def __init__(self, host="1.2.3.4", entry_id="entry-1", device_ids=None):
+    def __init__(self, host="1.2.3.4", entry_id="entry-1", device_ids=None, unique_id=None):
         self.host = host
         self.entry_id = entry_id
+        self.config_entry = type("ConfigEntry", (), {"unique_id": unique_id})() if unique_id else None
         self.pid = 1
         self.devices = {did: True for did in (device_ids or [])}
         self.sent = []
@@ -207,6 +208,70 @@ async def test_remove_stale_devices_removes_missing(monkeypatch):
 
     assert result['count'] == 1
     assert result['removed'][0]['id'] == 200
+    assert registry.removed == ["dev-200"]
+
+
+@pytest.mark.asyncio
+async def test_remove_stale_devices_handles_runtime_host_based_identifiers(monkeypatch):
+    """Runtime identifiers are host-based, not entry-id-based."""
+    hass = FakeHass()
+    monkeypatch.setattr(yp, "async_register_admin_service", lambda *a, **k: None)
+    monkeypatch.setattr(yp.persistent_notification, "async_create", lambda *a, **k: None)
+
+    gw = StaleGateway(host="1.2.3.4", entry_id="entry-1", device_ids=[100])
+    hass.data[DOMAIN][CONF_GATEWAYS]["entry-1"] = gw
+
+    entries = [
+        FakeDeviceEntry("dev-100", "Light", {(DOMAIN, "1.2.3.4-100")}),
+        FakeDeviceEntry("dev-200", "Old Sensor", {(DOMAIN, "1.2.3.4-200")}),
+    ]
+    registry = FakeDeviceRegistry(entries)
+
+    import homeassistant.helpers.device_registry as dr
+    monkeypatch.setattr(dr, "async_get", lambda hass: registry)
+    monkeypatch.setattr(dr, "async_entries_for_config_entry", lambda reg, eid: entries)
+
+    services = yp.ComponentServices(hass)
+
+    class Call:
+        data = {"dry_run": False}
+
+    result = await services.async_remove_stale_devices(Call())
+
+    assert result["count"] == 1
+    assert result["removed"][0]["id"] == 200
+    assert registry.removed == ["dev-200"]
+
+
+@pytest.mark.asyncio
+async def test_remove_stale_devices_handles_stable_unique_id_identifiers(monkeypatch):
+    """Registry cleanup should understand the stable config-entry unique_id prefix."""
+    hass = FakeHass()
+    monkeypatch.setattr(yp, "async_register_admin_service", lambda *a, **k: None)
+    monkeypatch.setattr(yp.persistent_notification, "async_create", lambda *a, **k: None)
+
+    gw = StaleGateway(host="1.2.3.4", entry_id="entry-1", device_ids=[100], unique_id="1.2.3.3")
+    hass.data[DOMAIN][CONF_GATEWAYS]["entry-1"] = gw
+
+    entries = [
+        FakeDeviceEntry("dev-100", "Light", {(DOMAIN, "1.2.3.3-100")}),
+        FakeDeviceEntry("dev-200", "Old Sensor", {(DOMAIN, "1.2.3.3-200")}),
+    ]
+    registry = FakeDeviceRegistry(entries)
+
+    import homeassistant.helpers.device_registry as dr
+    monkeypatch.setattr(dr, "async_get", lambda hass: registry)
+    monkeypatch.setattr(dr, "async_entries_for_config_entry", lambda reg, eid: entries)
+
+    services = yp.ComponentServices(hass)
+
+    class Call:
+        data = {"dry_run": False}
+
+    result = await services.async_remove_stale_devices(Call())
+
+    assert result["count"] == 1
+    assert result["removed"][0]["id"] == 200
     assert registry.removed == ["dev-200"]
 
 
@@ -313,6 +378,36 @@ async def test_remove_stale_devices_skips_gateway_device(monkeypatch):
     result = await services.async_remove_stale_devices(Call())
 
     assert result['count'] == 0
+    assert registry.removed == []
+
+
+@pytest.mark.asyncio
+async def test_remove_stale_devices_skips_gateway_device_with_stable_unique_id(monkeypatch):
+    """Gateway device must not be removed when registry identity is stable and host changed."""
+    hass = FakeHass()
+    monkeypatch.setattr(yp, "async_register_admin_service", lambda *a, **k: None)
+    monkeypatch.setattr(yp.persistent_notification, "async_create", lambda *a, **k: None)
+
+    gw = StaleGateway(host="1.2.3.4", entry_id="entry-1", device_ids=[], unique_id="1.2.3.3")
+    hass.data[DOMAIN][CONF_GATEWAYS]["entry-1"] = gw
+
+    entries = [
+        FakeDeviceEntry("dev-gw", "Gateway", {(DOMAIN, "1.2.3.3-1.2.3.3")}),
+    ]
+    registry = FakeDeviceRegistry(entries)
+
+    import homeassistant.helpers.device_registry as dr
+    monkeypatch.setattr(dr, "async_get", lambda hass: registry)
+    monkeypatch.setattr(dr, "async_entries_for_config_entry", lambda reg, eid: entries)
+
+    services = yp.ComponentServices(hass)
+
+    class Call:
+        data = {"dry_run": False}
+
+    result = await services.async_remove_stale_devices(Call())
+
+    assert result["count"] == 0
     assert registry.removed == []
 
 
