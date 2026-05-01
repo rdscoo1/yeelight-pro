@@ -121,10 +121,8 @@ def test_light_supported_modes_rgb_ct_transition():
     # supported_color_modes определяется по наличию конвертеров
     assert entity.supported_color_modes == {ColorMode.RGB, ColorMode.COLOR_TEMP}
 
-    # min/max mireds/kelvin считаются из ColorTempKelvin
+    # min/max kelvin propagated from ColorTempKelvin converter (mireds is deprecated in HA)
     cov = device.converters[ATTR_COLOR_TEMP]
-    assert entity.min_mireds == int(1_000_000 / cov.maxk)
-    assert entity.max_mireds == int(1_000_000 / cov.mink)
     assert entity._attr_min_color_temp_kelvin == cov.mink
     assert entity._attr_max_color_temp_kelvin == cov.maxk
 
@@ -171,6 +169,19 @@ def test_light_supported_modes_onoff_fallback():
     assert entity.supported_color_modes == {ColorMode.ONOFF}
 
 
+def test_light_color_mode_starts_unknown_until_real_color_state():
+    device, conv = make_light_device(with_rgb=True, with_ct=True)
+    entity = XLightEntity(device, conv)
+
+    assert entity._attr_color_mode is None
+
+    entity.async_set_state({ATTR_BRIGHTNESS: 123})
+    assert entity._attr_color_mode is None
+
+    entity.async_set_state({ATTR_COLOR_TEMP_KELVIN: 4000})
+    assert entity._attr_color_mode == ColorMode.COLOR_TEMP
+
+
 def test_async_set_state_updates_fields():
     device, conv = make_light_device()
     entity = XLightEntity(device, conv)
@@ -187,7 +198,6 @@ def test_async_set_state_updates_fields():
 
     assert entity._attr_is_on is True
     assert entity.brightness == 123
-    assert entity.color_temp == 250
     assert entity.color_temp_kelvin == 4000
     assert entity.rgb_color == (1, 2, 3)
 
@@ -248,7 +258,6 @@ async def test_prestage_color_temp_kelvin(monkeypatch):
 
     assert sent["color_temp"] == 4000
     assert entity.color_temp_kelvin == 4000
-    assert entity.color_temp == int(1_000_000 / 4000)
     assert entity._attr_color_mode == ColorMode.COLOR_TEMP
     # питание не трогаем
     assert entity._attr_is_on is None or entity._attr_is_on is False
@@ -273,5 +282,4 @@ async def test_prestage_color_temp_mired_with_clamp(monkeypatch):
 
     assert sent["color_temp"] == 6500
     assert entity.color_temp_kelvin == 6500
-    assert entity.color_temp == int(1_000_000 / 6500)
     assert entity._attr_color_mode == ColorMode.COLOR_TEMP

@@ -206,7 +206,7 @@ class ProGateway:
         return True
 
     async def stop(self, *args: Any) -> None:
-        """Stop the gateway connection and cleanup. Idempotent — safe to call multiple times."""
+        """Stop the gateway connection and cleanup. Idempotent - safe to call multiple times."""
         if self._stopping:
             return
         self._stopping = True
@@ -428,19 +428,26 @@ class ProGateway:
     async def _send_with_retry(self, method: str, retries: int = DEFAULT_RETRIES, **kwargs: Any) -> Optional[Dict]:
         """Send command with retry logic."""
         last_error = None
-        
+        # Fire-and-forget: a None return from _send_internal is normal - don't
+        # treat it as failure and don't retry.
+        wait_result = kwargs.get('wait_result', True)
+
         for attempt in range(retries):
             try:
                 result = await self._send_internal(method, **kwargs)
                 if result is not None:
                     self.stats.commands_success += 1
                     return result
-                
-                # None result might indicate connection issue
+                if not wait_result:
+                    self.stats.commands_success += 1
+                    return None
+
+                # None result with wait_result=True indicates a real failure
+                # (timeout, connection issue, etc.) - retry.
                 if attempt < retries - 1:
                     self.stats.commands_retried += 1
                     delay = RETRY_DELAY_BASE * (2 ** attempt)
-                    self.log.debug('[%s] Command %s returned None, retry %d/%d in %.1fs', 
+                    self.log.debug('[%s] Command %s returned None, retry %d/%d in %.1fs',
                                   self.host, method, attempt + 1, retries, delay)
                     await asyncio.sleep(delay)
             except (ConnectionError, BrokenPipeError, OSError) as exc:
@@ -628,6 +635,16 @@ class ProGateway:
         _close_after = False  # set inside lock, acted on after lock is released
         cid: Union[str, int]
 
+        # Guard reserved wire-protocol keys. Caller bugs that pass `id` or
+        # `method` via kwargs would otherwise silently overwrite cid/method
+        # because of dict-merge precedence below.
+        for reserved in ('id', 'method'):
+            if reserved in kwargs:
+                raise TypeError(
+                    f"_send_internal got reserved kwarg {reserved!r}; "
+                    f"pass via the appropriate parameter instead"
+                )
+
         async with self._send_lock:
             if not self.writer:
                 if not await self.connect():
@@ -667,7 +684,7 @@ class ProGateway:
                         self._msgs.pop(cid, None)
                     if fut and not fut.done():
                         fut.cancel()
-                    # Do NOT await _close_connection() here — it acquires _connect_lock
+                    # Do NOT await _close_connection() here - it acquires _connect_lock
                     # which would be held under _send_lock, risking a lock-ordering issue.
                     _close_after = True
             else:
@@ -678,7 +695,7 @@ class ProGateway:
                     cid,
                 )
 
-        # _send_lock is released — safe to close the connection now.
+        # _send_lock is released - safe to close the connection now.
         if _close_after:
             await self._close_connection()
             return None
@@ -804,7 +821,7 @@ class ProGateway:
                 self.hass,
                 f"Gateway {self.host} reconnected (attempt #{self.stats.reconnect_count})",
                 title="Yeelight Pro Reconnected",
-                notification_id=f"{DOMAIN}-reconnect-{self.host}",
+                notification_id=f"{DOMAIN}-reconnect-{self.host}-{self.stats.reconnect_count}",
             )
         except Exception as exc:
             self.log.debug('[%s] Failed to send reconnect notification: %s', self.host, exc)

@@ -225,7 +225,7 @@ class XDevice:
         decoded = self.decode_event(data)
         self.update(decoded)
         self._fire_ha_event(data, decoded)
-        _LOGGER.debug('Event fired: %s', [data, decoded])
+        _LOGGER.debug('Event fired: data=%s decoded=%s', data, decoded)
 
     def _fire_ha_event(self, raw_data: dict, decoded: dict) -> None:
         """Fire event to Home Assistant event bus."""
@@ -414,7 +414,7 @@ class XDevice:
             actual_power = self.prop_params.get('p')
 
             if actual_power is None:
-                # Device has not sent gateway_post.prop at all — state is unknown.
+                # Device has not sent gateway_post.prop at all - state is unknown.
                 # Retrying to an unresponsive device produces log spam without benefit.
                 _LOGGER.debug(
                     '[%s] State unconfirmed after %.1fs: device has not reported p '
@@ -561,6 +561,13 @@ class GatewayDevice(XDevice):
         self.add_converter(SceneConv(attr, 'button', node=node))
         await self.setup_entities()
 
+    async def activate_scene(self, scene_id):
+        """Trigger a scene through the gateway. Routed through the gateway's
+        retry/stats machinery instead of bypassing it via raw `send`."""
+        if not self.gateway or scene_id is None:
+            return None
+        return await self.gateway.send('gateway_set.prop', scenes=[{'id': scene_id}])
+
     def entity_id(self, conv: Converter):
         return f'{conv.domain}.yp_{conv.attr}'
 
@@ -661,6 +668,7 @@ class SwitchPanelDevice(RelayDevice, SwitchSensorDevice):
 
 class RelayDoubleDevice(XDevice):
     def setup_converters(self):
+        super().setup_converters()
         self.add_converters(
             PropBoolConv('switch1', 'switch', prop='1-p'),
             PropBoolConv('switch2', 'switch', prop='2-p')
@@ -723,7 +731,8 @@ class WifiPanelDevice(RelayDoubleDevice):
             **node,
             'type': 'wifi_panel',
         })
-        self.name = 'Yeelight Wifi Panel'
+        if not self.name:
+            self.name = 'Yeelight Wifi Panel'
 
     async def set_prop(self, **kwargs):
         kwargs['method'] = 'device_set.prop'
@@ -764,7 +773,16 @@ class ClimateDevice(XDevice):
 
 class GroupDevice(LightDevice):
     """Device representing a group of lights from the gateway."""
-    
+
+    # Fallback used until members are resolvable (gateway not yet attached, or
+    # members not yet in the topology). Matches historical behavior: most groups
+    # in this hardware are CT-capable so it's the safest broad default.
+    _DEFAULT_COLOR_MODES = frozenset({
+        ColorMode.ONOFF,
+        ColorMode.BRIGHTNESS,
+        ColorMode.COLOR_TEMP,
+    })
+
     def __init__(self, node: dict):
         super().__init__(node)
         self.member_ids = node.get('cids') or []
@@ -772,7 +790,30 @@ class GroupDevice(LightDevice):
 
     @property
     def color_modes(self):
-        return {ColorMode.ONOFF, ColorMode.BRIGHTNESS, ColorMode.COLOR_TEMP}
+        gateway = self.gateway
+        if not gateway or not self.member_ids:
+            return set(self._DEFAULT_COLOR_MODES)
+
+        # Intersect member capabilities - a feature is only usable on the group
+        # when every member supports it. If any member is unknown, fall back to
+        # the default to avoid hiding controls users expect.
+        member_modes: list[set] = []
+        for mid in self.member_ids:
+            member = gateway.devices.get(mid)
+            if member is None:
+                return set(self._DEFAULT_COLOR_MODES)
+            modes = getattr(member, 'color_modes', None)
+            if modes is None:
+                return set(self._DEFAULT_COLOR_MODES)
+            member_modes.append(set(modes))
+
+        if not member_modes:
+            return set(self._DEFAULT_COLOR_MODES)
+
+        result = set.intersection(*member_modes)
+        # ONOFF is always supported by lights - guarantee at least that.
+        result.add(ColorMode.ONOFF)
+        return result
 
     @property
     def online(self):

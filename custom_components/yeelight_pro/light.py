@@ -55,11 +55,24 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     await _setup_and_register_service(hass, config or discovery_info, async_add_entities)
 
 
+_LIGHT_FORWARD_ATTRS = frozenset({
+    ATTR_BRIGHTNESS,
+    ATTR_COLOR_TEMP_KELVIN,
+    ATTR_RGB_COLOR,
+    ATTR_TRANSITION,
+})
+
+
 class XLightEntity(XEntity, LightEntity):
     _attr_is_on = None
 
     def __init__(self, device: XDevice, conv: Converter, option=None):
         super().__init__(device, conv, option)
+
+        # Tracks the last user-intended color mode. async_set_state respects this
+        # over incoming gateway data so that, e.g., a CT echo from the gateway
+        # does not flip a user who just selected RGB back into COLOR_TEMP.
+        self._user_color_mode: ColorMode | None = None
 
         # Initialize flags first
         self._attr_supported_color_modes = set()
@@ -71,12 +84,7 @@ class XLightEntity(XEntity, LightEntity):
 
         if cov := device.converters.get('color_temp'):
             self._attr_supported_color_modes.add(ColorMode.COLOR_TEMP)
-            if hasattr(cov, "minm") and hasattr(cov, "maxm"):
-                self._attr_min_mireds = cov.minm
-                self._attr_max_mireds = cov.maxm
-            elif hasattr(cov, "mink") and hasattr(cov, "maxk"):
-                self._attr_min_mireds = int(1_000_000 / cov.maxk)
-                self._attr_max_mireds = int(1_000_000 / cov.mink)
+            if hasattr(cov, "mink") and hasattr(cov, "maxk"):
                 self._attr_min_color_temp_kelvin = cov.mink
                 self._attr_max_color_temp_kelvin = cov.maxk
 
@@ -90,25 +98,17 @@ class XLightEntity(XEntity, LightEntity):
         if device.converters.get(ATTR_TRANSITION):
             self._attr_supported_features |= LightEntityFeature.TRANSITION
 
-        # Initialize color_mode to prevent warnings
-        if ColorMode.RGB in self._attr_supported_color_modes:
-            self._attr_color_mode = ColorMode.RGB
-        elif ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
-            self._attr_color_mode = ColorMode.COLOR_TEMP
-        elif ColorMode.BRIGHTNESS in self._attr_supported_color_modes:
-            self._attr_color_mode = ColorMode.BRIGHTNESS
-        else:
-            self._attr_color_mode = ColorMode.ONOFF
+        self._attr_color_mode = None
+
+    def _default_color_mode(self) -> ColorMode | None:
+        if len(self._attr_supported_color_modes) == 1:
+            return next(iter(self._attr_supported_color_modes))
+        return None
 
     def _clamp_ct_kelvin(self, k: int) -> int:
         lo = getattr(self, "_attr_min_color_temp_kelvin", None)
         hi = getattr(self, "_attr_max_color_temp_kelvin", None)
         return max(lo, min(hi, k)) if lo and hi else k
-
-    def _clamp_mired(self, m: int) -> int:
-        lo = getattr(self, "_attr_min_mireds", None)
-        hi = getattr(self, "_attr_max_mireds", None)
-        return max(lo, min(hi, m)) if lo and hi else m
 
     @callback
     def async_set_state(self, data: dict):
@@ -119,41 +119,35 @@ class XLightEntity(XEntity, LightEntity):
             self._attr_brightness = data[ATTR_BRIGHTNESS]
         if ATTR_COLOR_TEMP_KELVIN in data:
             self._attr_color_temp_kelvin = data[ATTR_COLOR_TEMP_KELVIN]
-            self._attr_color_temp = int(1_000_000 / max(1, data[ATTR_COLOR_TEMP_KELVIN]))
-            if ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
-                self._attr_color_mode = ColorMode.COLOR_TEMP
         if ATTR_RGB_COLOR in data:
             self._attr_rgb_color = data[ATTR_RGB_COLOR]
-            if ColorMode.RGB in self._attr_supported_color_modes:
-                self._attr_color_mode = ColorMode.RGB
 
-        # Ensure color_mode is always set
-        if not self._attr_color_mode:
-            if ColorMode.RGB in self._attr_supported_color_modes:
-                self._attr_color_mode = ColorMode.RGB
-            elif ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
-                self._attr_color_mode = ColorMode.COLOR_TEMP
-            elif ColorMode.BRIGHTNESS in self._attr_supported_color_modes:
-                self._attr_color_mode = ColorMode.BRIGHTNESS
-            else:
-                self._attr_color_mode = ColorMode.ONOFF
+        # Pick the displayed color_mode. Priority:
+        # 1. Honor the user's last intent (set in async_turn_on).
+        # 2. Otherwise, pick a single mode from this update - RGB wins over CT
+        #    so that we don't flip back to CT when the gateway echoes both.
+        # 3. Otherwise, fall back to a reasonable default for this device.
+        if self._user_color_mode and self._user_color_mode in self._attr_supported_color_modes:
+            self._attr_color_mode = self._user_color_mode
+        elif ATTR_RGB_COLOR in data and ColorMode.RGB in self._attr_supported_color_modes:
+            self._attr_color_mode = ColorMode.RGB
+        elif ATTR_COLOR_TEMP_KELVIN in data and ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
+            self._attr_color_mode = ColorMode.COLOR_TEMP
+        elif not self._attr_color_mode:
+            self._attr_color_mode = self._default_color_mode()
 
     async def async_turn_on(self, **kwargs):
         """Turn the entity on."""
         kwargs[self._name] = True
+        # Record user intent so subsequent gateway echoes don't flip the mode.
         if ATTR_RGB_COLOR in kwargs:
+            self._user_color_mode = ColorMode.RGB
             self._attr_color_mode = ColorMode.RGB
         elif ATTR_COLOR_TEMP_KELVIN in kwargs:
+            self._user_color_mode = ColorMode.COLOR_TEMP
             self._attr_color_mode = ColorMode.COLOR_TEMP
         elif not self._attr_color_mode:
-            if ColorMode.RGB in self._attr_supported_color_modes:
-                self._attr_color_mode = ColorMode.RGB
-            elif ColorMode.COLOR_TEMP in self._attr_supported_color_modes:
-                self._attr_color_mode = ColorMode.COLOR_TEMP
-            elif ColorMode.BRIGHTNESS in self._attr_supported_color_modes:
-                self._attr_color_mode = ColorMode.BRIGHTNESS
-            else:
-                self._attr_color_mode = ColorMode.ONOFF
+            self._attr_color_mode = self._default_color_mode()
 
         return await self.async_turn(kwargs[self._name], **kwargs)
 
@@ -163,8 +157,12 @@ class XLightEntity(XEntity, LightEntity):
 
     async def async_turn(self, on: bool = True, **kwargs):
         """Turn the entity on/off."""
-        kwargs[self._name] = on
-        ret = await self.device_send_props(kwargs)
+        # Whitelist HA kwargs to avoid forwarding unknown keys to the gateway.
+        # Any future HA attr that collides with a converter `attr` would otherwise
+        # be silently written to the device.
+        payload = {k: v for k, v in kwargs.items() if k in _LIGHT_FORWARD_ATTRS}
+        payload[self._name] = on
+        ret = await self.device_send_props(payload)
         if ret:
             self._attr_is_on = on
             if self.added:
@@ -186,7 +184,6 @@ class XLightEntity(XEntity, LightEntity):
 
             payload["color_temp"] = k
             self._attr_color_temp_kelvin = k
-            self._attr_color_temp = int(1_000_000 / max(1, k))
             self._attr_color_mode = ColorMode.COLOR_TEMP
 
         if not payload:

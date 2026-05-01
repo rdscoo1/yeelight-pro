@@ -73,7 +73,7 @@ class XClimateEntity(XEntity, ClimateEntity, RestoreEntity):
     @callback
     def async_set_state(self, data: dict):
         super().async_set_state(data)
-        # Only update known climate attributes — never use setattr on arbitrary keys
+        # Only update known climate attributes - never use setattr on arbitrary keys
         for k in self._CLIMATE_ATTRS:
             if k in data:
                 setattr(self, k, data[k])
@@ -106,15 +106,12 @@ class XClimateEntity(XEntity, ClimateEntity, RestoreEntity):
     
     async def async_set_fan_mode(self, fan_mode, **kwargs):
         """Set new target fan mode."""
-        kwargs['fan_mode'] = fan_mode
-        await self.device_send_props(kwargs)
-    
+        await self.device_send_props({'fan_mode': fan_mode})
+
     async def async_turn_on(self, **kwargs):
         """Turn the entity on."""
-        kwargs['is_on'] = True
-        await self.device_send_props(kwargs)
+        await self.device_send_props({'is_on': True})
 
     async def async_turn_off(self, **kwargs):
         """Turn the entity off."""
-        kwargs['is_on'] = False
-        await self.device_send_props(kwargs)
+        await self.device_send_props({'is_on': False})

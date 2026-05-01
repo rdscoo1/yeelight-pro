@@ -43,4 +43,11 @@ class XSceneEntity(XButtonEntity):
 
     async def async_press(self):
         """Press the button."""
-        await self.device.gateway.send('gateway_set.prop', scenes=[{'id': self._attr_id}])
+        # Route through the device so retry/stats machinery applies, instead of
+        # bypassing it with a direct gateway.send.
+        activator = getattr(self.device, 'activate_scene', None)
+        if activator is None:
+            # Fallback for non-GatewayDevice owners (shouldn't happen today).
+            await self.device.gateway.send('gateway_set.prop', scenes=[{'id': self._attr_id}])
+            return
+        await activator(self._attr_id)

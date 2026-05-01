@@ -1,5 +1,53 @@
 # Release Notes
 
+## [1.3.5] - 2026-05-01
+
+### Patch Release: Home Assistant Entity Cleanup
+
+This patch release focuses on Home Assistant correctness after the 1.3.x reliability work: safer service payloads, more accurate entity state, better reconnect visibility, and small release-readiness fixes for HACS/Home Assistant users.
+
+### Fixed
+
+- **Safer service command payloads**
+  - Climate, cover, and light entities now only forward the intended Home Assistant attributes to the Yeelight gateway
+  - This prevents unrelated HA service kwargs from accidentally becoming device writes
+
+- **More accurate light color state**
+  - RGB/CT lights no longer guess a color mode before real color state arrives
+  - Recent user color intent is preserved when gateway echoes include stale color-temperature data
+
+- **WiFi panel names preserved**
+  - WiFi panels now keep names reported by the gateway or Yeelight app
+  - The hardcoded fallback is only used when the gateway does not provide a name
+
+- **Entity state propagation cleanup**
+  - Gateway connection binary sensors and diagnostics sensors now preserve base entity state behavior
+  - Reconnect notifications now use a unique notification ID per reconnect attempt
+
+- **Home Assistant release metadata**
+  - `send_command.result` is now documented in `services.yaml`
+  - Options flow now exposes `pid` for gateway/panel hardware changes
+
+### Changed
+
+- Scene activation now routes through the gateway device abstraction for retry/stat accounting
+- Group light color modes are derived from member capabilities when member devices are available
+- Gateway send handling now avoids retrying fire-and-forget commands and rejects reserved protocol kwargs
+
+### Tests
+
+- Added regression coverage for:
+  - climate/light/cover kwargs filtering
+  - light color-mode initialization and user intent
+  - WiFi panel name preservation
+  - reconnect notification IDs
+  - service metadata
+  - options-flow `pid` handling
+
+**Full Changelog**: [v1.3.4...v1.3.5](https://github.com/rdscoo1/yeelight-pro/compare/v1.3.4...v1.3.5)
+
+---
+
 ## [1.3.4] - 2026-03-31
 
 ### Patch Release: Identity & Gateway Fixes

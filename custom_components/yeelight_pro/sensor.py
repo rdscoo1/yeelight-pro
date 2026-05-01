@@ -56,7 +56,10 @@ class XSensorEntity(XEntity, SensorEntity, RestoreEntity):
 
 class XActionEntity(XEntity, SensorEntity):
     _attr_native_value = ''
-    clear_task: asyncio.Task = None
+
+    def __init__(self, device: XDevice, conv: Converter, option=None):
+        super().__init__(device, conv, option)
+        self.clear_task: asyncio.Task | None = None
 
     @callback
     def async_set_state(self, data: dict):
@@ -91,16 +94,16 @@ class XDiagnosticsSensor(XEntity, SensorEntity):
     
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:chart-box"
-    _update_task: asyncio.Task = None
-    
+
     def __init__(self, device: XDevice, conv: Converter, option=None):
         super().__init__(device, conv, option)
+        self._update_task: asyncio.Task | None = None
         self._attr_name = f"{device.name} Diagnostics"
         self._attr_native_value = "OK"
     
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
-        # Use asyncio.create_task (NOT hass.async_create_task) — hass.async_create_task
+        # Use asyncio.create_task (NOT hass.async_create_task) - hass.async_create_task
         # registers the task in hass._tasks which HA awaits during bootstrap. Since
         # _periodic_update is an infinite loop it would block startup for ~300 s.
         # Cleanup is handled manually in async_will_remove_from_hass.
@@ -188,5 +191,7 @@ class XDiagnosticsSensor(XEntity, SensorEntity):
     
     @callback
     def async_set_state(self, data: dict):
-        """Handle state update - update diagnostics."""
+        """Handle state update - refresh diagnostics from gateway and propagate
+        any subscribed extra attributes from the underlying device update."""
+        super().async_set_state(data)
         self._update_diagnostics()

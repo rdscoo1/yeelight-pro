@@ -56,19 +56,19 @@ class XCoverEntity(XEntity, CoverEntity, RestoreEntity):
             self.async_set_state({ATTR_POSITION: attrs[ATTR_CURRENT_POSITION]})
 
     async def async_open_cover(self, **kwargs):
-        # Open cover: set position to 100
-        kwargs[ATTR_POSITION] = 100
-        await self.async_set_cover_position(**kwargs)
+        # Open: drive to 100% via position channel
+        await self.device_send_props({ATTR_POSITION: 100})
 
     async def async_close_cover(self, **kwargs):
-        # Close cover: set position to 0
-        kwargs[ATTR_POSITION] = 0
-        await self.async_set_cover_position(**kwargs)
+        # Close: drive to 0% via position channel
+        await self.device_send_props({ATTR_POSITION: 0})
 
     async def async_stop_cover(self, **kwargs):
-        # Stop cover: send pause command
+        # Stop: send the motor pause command
         await self.device_send_props({self._name: 'pause'})
 
     async def async_set_cover_position(self, **kwargs):
-        # Set cover position
-        await self.device_send_props(kwargs)
+        # Forward only ATTR_POSITION - never leak unrelated HA kwargs to the gateway.
+        if ATTR_POSITION not in kwargs:
+            return
+        await self.device_send_props({ATTR_POSITION: kwargs[ATTR_POSITION]})

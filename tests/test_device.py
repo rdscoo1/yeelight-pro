@@ -422,6 +422,20 @@ def test_relaydoubledevice_has_two_switches():
     assert "switch2" in dev.converters
 
 
+def test_wifipaneldevice_preserves_gateway_name_and_input_node():
+    node = {
+        "id": 5,
+        "nt": NodeType.MESH,
+        "type": DeviceType.RELAY_DOUBLE,
+        "n": "Kitchen Panel",
+    }
+
+    dev = WifiPanelDevice(node)
+
+    assert dev.name == "Kitchen Panel"
+    assert node["type"] == DeviceType.RELAY_DOUBLE
+
+
 @pytest.mark.asyncio
 async def test_wifipaneldevice_set_prop_uses_device_set_prop():
     node = {"id": 5, "nt": NodeType.MESH, "type": DeviceType.RELAY_DOUBLE}

@@ -45,6 +45,31 @@ def test_gateway():
     assert gtw.host == host
 
 
+def test_reconnect_notification_id_includes_reconnect_count(monkeypatch):
+    gtw = get_gateway("1.2.3.4")
+    notifications = []
+
+    def fake_create(*args, **kwargs):
+        notifications.append((args, kwargs))
+
+    monkeypatch.setattr(
+        "homeassistant.components.persistent_notification.async_create",
+        fake_create,
+    )
+
+    gtw.stats.reconnect_count = 1
+    gtw._send_reconnect_notification()
+    gtw.stats.reconnect_count = 2
+    gtw._send_reconnect_notification()
+
+    assert [
+        kwargs["notification_id"] for _, kwargs in notifications
+    ] == [
+        "yeelight_pro-reconnect-1.2.3.4-1",
+        "yeelight_pro-reconnect-1.2.3.4-2",
+    ]
+
+
 class DummyWriter:
     """Простейший writer, который только накапливает записанные байты."""
 

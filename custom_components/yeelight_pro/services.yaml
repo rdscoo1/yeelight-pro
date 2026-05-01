@@ -18,6 +18,10 @@ send_command:
       example: '{"id":0}'
       selector:
         object:
+    result:
+      description: Event result payload override
+      selector:
+        object:
     throw:
       description: Throw result
       default: true

@@ -163,8 +163,8 @@ async def test_async_set_fan_mode(monkeypatch):
 
     await entity.async_set_fan_mode(FAN_HIGH, extra=1)
 
-    # должен передать и extra, и fan_mode
-    assert sent["payload"] == {"extra": 1, "fan_mode": FAN_HIGH}
+    # Only fan_mode is sent — arbitrary kwargs from HA must not leak to the gateway.
+    assert sent["payload"] == {"fan_mode": FAN_HIGH}
 
 
 @pytest.mark.asyncio
@@ -182,7 +182,8 @@ async def test_async_turn_on(monkeypatch):
 
     await entity.async_turn_on(foo="bar")
 
-    assert sent["payload"] == {"foo": "bar", "is_on": True}
+    # Only is_on is sent — arbitrary kwargs from HA must not leak to the gateway.
+    assert sent["payload"] == {"is_on": True}
 
 
 @pytest.mark.asyncio
@@ -200,4 +201,5 @@ async def test_async_turn_off(monkeypatch):
 
     await entity.async_turn_off(foo="bar")
 
-    assert sent["payload"] == {"foo": "bar", "is_on": False}
+    # Only is_on is sent — arbitrary kwargs from HA must not leak to the gateway.
+    assert sent["payload"] == {"is_on": False}

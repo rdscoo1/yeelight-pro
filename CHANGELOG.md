@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] - 2026-05-01
+
+### Fixed
+- Prevented Home Assistant service kwargs from leaking into climate, cover, and light gateway payloads
+- Stabilized light color-mode reporting by honoring user color intent and avoiding guessed RGB/CT mode before real state arrives
+- Preserved WiFi panel names reported by the gateway instead of replacing them with a hardcoded label
+- Restored gateway connection and diagnostics entity state propagation
+- Made reconnect notifications unique per reconnect attempt so repeated reconnects remain visible
+- Documented the `send_command.result` service field and added `pid` to the options flow
+
+### Changed
+- Routed scene activation through the gateway device abstraction for retry/stat accounting
+- Derived group light color modes from member capabilities when members are available
+- Hardened gateway send handling around fire-and-forget commands and reserved wire-protocol keys
+
+### Testing
+- Added and updated regression coverage for kwargs filtering, light color-mode behavior, WiFi panel names, reconnect notifications, options flow, and service metadata
+
 ## [1.3.4] - 2026-03-31
 
 ### Fixed

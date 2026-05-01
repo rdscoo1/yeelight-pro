@@ -72,6 +72,7 @@ class XGatewayConnectionEntity(XEntity, BinarySensorEntity):
     @callback
     def async_set_state(self, data: dict):
         """Update connection state from gateway."""
+        super().async_set_state(data)
         if 'connection' in data:
             self._attr_is_on = data['connection']
         elif 'available' in data:

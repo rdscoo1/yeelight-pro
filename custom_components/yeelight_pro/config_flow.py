@@ -35,6 +35,10 @@ def get_flow_schema(defaults: dict):
 def get_options_schema(defaults: dict):
     return {
         vol.Required(CONF_HOST, default=defaults.get(CONF_HOST, '')): str,
+        vol.Required(
+            CONF_PID,
+            default=defaults.get(CONF_PID, PID_GATEWAY),
+        ): vol.In(GATEWAY_TYPES),
         vol.Optional(
             CONF_PORT,
             default=defaults.get(CONF_PORT, DEFAULT_PORT)
@@ -112,7 +116,11 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     self.hass.config_entries.async_update_entry(
                         config_entry,
                         title=user_input[CONF_HOST] or config_entry.title,
-                        data={**config_entry.data, CONF_HOST: user_input[CONF_HOST]},
+                        data={
+                            **config_entry.data,
+                            CONF_HOST: user_input[CONF_HOST],
+                            CONF_PID: user_input.get(CONF_PID, config_entry.data.get(CONF_PID, PID_GATEWAY)),
+                        },
                     )
                     options = {
                         CONF_PORT: user_input.get(CONF_PORT, DEFAULT_PORT),

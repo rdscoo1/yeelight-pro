@@ -228,7 +228,6 @@ class ComponentServices:
 
         gtw: ProGateway | None = None
         for g in self.hass.data[DOMAIN][CONF_GATEWAYS].values():
-            # ✅ фикс: проверяем g, а не gtw
             if not isinstance(g, ProGateway):
                 continue
             if not gip or g.host == gip:
@@ -310,20 +309,26 @@ class ComponentServices:
         await gtw.on_message(message.encode('utf-8'))
 
     async def async_remove_stale_devices(self, call):
-        """Remove devices that are no longer in gateway topology."""
+        """Remove devices that are no longer in gateway topology.
+
+        Note: registry identifiers may use any of three legacy prefix
+        conventions (entry_id, host, config-entry unique_id). We strip whichever
+        one matches and use the remaining suffix as the canonical device id -
+        this is intentional registry-format migration support, not new code.
+        """
         dat = call.data or {}
         gip = dat.get(CONF_HOST)
         dry_run = dat.get('dry_run', False)
-        
+
         removed_devices = []
         device_registry = dr.async_get(self.hass)
-        
+
         for gtw in self.hass.data[DOMAIN][CONF_GATEWAYS].values():
             if not isinstance(gtw, ProGateway):
                 continue
             if gip and gtw.host != gip:
                 continue
-            
+
             current_device_ids = set(gtw.devices.keys())
             gateway_identity_keys = {
                 str(key)
@@ -335,7 +340,11 @@ class ComponentServices:
                 )
                 if key is not None
             }
-            
+
+            prefixes = tuple(
+                p for p in (_gateway_registry_key(gtw), gtw.host, gtw.entry_id) if p
+            )
+
             for device_entry in dr.async_entries_for_config_entry(
                 device_registry, gtw.entry_id
             ):
@@ -344,19 +353,19 @@ class ComponentServices:
                         continue
                     device_uid = identifier[1]
                     device_id_part = device_uid
-                    for prefix in (_gateway_registry_key(gtw), gtw.host, gtw.entry_id):
-                        if prefix and device_uid.startswith(f"{prefix}-"):
+                    for prefix in prefixes:
+                        if device_uid.startswith(f"{prefix}-"):
                             device_id_part = device_uid[len(prefix) + 1:]
                             break
-                    
+
                     try:
                         device_id = int(device_id_part)
                     except ValueError:
                         device_id = device_id_part
-                    
+
                     if str(device_id) in gateway_identity_keys:
                         continue
-                    
+
                     if device_id not in current_device_ids:
                         removed_devices.append({
                             'name': device_entry.name,
@@ -365,19 +374,19 @@ class ComponentServices:
                         })
                         if not dry_run:
                             device_registry.async_remove_device(device_entry.id)
-        
+
         result_msg = f"{'Would remove' if dry_run else 'Removed'} {len(removed_devices)} stale device(s)"
         if removed_devices:
             device_list = "\n".join([f"- {d['name']} (ID: {d['id']})" for d in removed_devices])
             result_msg += f":\n{device_list}"
-        
+
         persistent_notification.async_create(
             self.hass,
             result_msg,
             title="Yeelight Pro Stale Devices",
             notification_id=f"{DOMAIN}-stale-devices",
         )
-        
+
         return {'removed': removed_devices, 'count': len(removed_devices)}
         
 def _gateway_registry_key(gateway) -> str:
@@ -406,6 +415,15 @@ def _device_registry_key(device, gateway_key: str) -> str:
     return str(device.id)
 
 
+def _device_identifier(device, gateway_key: str) -> tuple[str, str]:
+    """Return the canonical (DOMAIN, uid) tuple used in DeviceInfo.identifiers.
+
+    Single source of truth - used both when registering devices via XEntity
+    and when reconciling the registry in async_remove_stale_devices.
+    """
+    return (DOMAIN, f"{gateway_key}-{_device_registry_key(device, gateway_key)}")
+
+
 class XEntity(Entity):
     added = False
     _attr_should_poll = False
@@ -422,21 +440,23 @@ class XEntity(Entity):
         gw_id = _gateway_registry_key(gateway)
         device_registry_key = _device_registry_key(device, gw_id)
 
-        # Check if old unique_id exists in registry - if so, use it to avoid duplicates
+        # Migration: prefer the legacy unique_id when an existing registry entry
+        # is already using it. This keeps users' history intact across the
+        # uid-format change. New installs always get the new uid.
         old_uid = f"{device.id}-{self._name}"
         new_uid = f"{gw_id}-{device_registry_key}-{self._name}"
+        self._attr_unique_id = new_uid
 
-        # Try to check registry for existing entity (may not be available in tests)
-        existing_entity = None
-        try:
-            if hasattr(self.hass, 'data'):
-                reg = er.async_get(self.hass)
-                existing_entity = reg.async_get_entity_id(conv.domain, DOMAIN, old_uid)
-        except (KeyError, AttributeError):
-            pass
-
-        # Use old unique_id if it exists in registry, otherwise use new format
-        self._attr_unique_id = old_uid if existing_entity else new_uid
+        if conv.domain and self.hass is not None and hasattr(self.hass, 'data'):
+            try:
+                registry = er.async_get(self.hass)
+            except (KeyError, AttributeError):
+                # Registry not available (e.g. tests without full hass).
+                registry = None
+            if registry is not None:
+                existing = registry.async_get_entity_id(conv.domain, DOMAIN, old_uid)
+                if existing:
+                    self._attr_unique_id = old_uid
 
         self._attr_has_entity_name = True
         self._attr_icon = self._option.get('icon')
@@ -449,13 +469,13 @@ class XEntity(Entity):
         via_device = None
         if not isinstance(device, (GatewayDevice, WifiPanelDevice)):
             parent_device = getattr(gateway, "device", None)
-            parent_registry_key = _device_registry_key(parent_device, gw_id) if parent_device else gw_id
-            via_device = (DOMAIN, f"{gw_id}-{parent_registry_key}")
+            if parent_device is not None:
+                via_device = _device_identifier(parent_device, gw_id)
+            else:
+                via_device = (DOMAIN, gw_id)
 
         self._attr_device_info = DeviceInfo(
-            identifiers={
-                (DOMAIN, f"{gw_id}-{device_registry_key}"),
-            },
+            identifiers={_device_identifier(device, gw_id)},
             name=device.name,
             model=device.pid or device.type or '',
             via_device=via_device,
@@ -490,11 +510,7 @@ class XEntity(Entity):
     async def async_will_remove_from_hass(self):
         self.added = False
         self._queued_for_add = False
-        # HA base Entity defines async_will_remove_from_hass as a no-op coroutine;
-        # calling super() is safe and forward-compatible.
-        parent_method = getattr(super(), "async_will_remove_from_hass", None)
-        if parent_method is not None:
-            await parent_method()
+        await super().async_will_remove_from_hass()
 
     @callback
     def async_restore_last_state(self, state: str, attrs: dict):
