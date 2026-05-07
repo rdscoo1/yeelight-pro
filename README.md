@@ -6,90 +6,118 @@
 
 **English** | [Русский](README_RU.md)
 
-## Overview
+Yeelight Pro is a local-push Home Assistant integration for Yeelight Pro gateways and WiFi panels. It connects to the device over the local TCP API, discovers the gateway topology, creates Home Assistant entities for supported devices, and keeps entity state updated from gateway push messages.
 
-Yeelight Pro is a custom integration for [Home Assistant](https://www.home-assistant.io/) that connects your **Yeelight Pro Gateway** and all connected devices to the Home Assistant ecosystem. It provides comprehensive control and monitoring of lights, sensors, switches, climate devices, and more through a local TCP connection.
+Current integration version: **1.3.5**.
 
-> 🧩 Originally developed by [@hasscc](https://github.com/hasscc), extensively refactored and modernized by [@rdscoo1](https://github.com/rdscoo1) with improved stability, comprehensive diagnostics, and 100+ automated tests.
+## Highlights
 
-## Features
+- Local TCP connection, no cloud polling and no external Python requirements.
+- UI config flow for **Gateway Pro** and **WiFi Panel** gateway types.
+- Automatic topology discovery for devices, groups, scenes, and gateway entities.
+- Reconnect handling with exponential backoff, keepalive checks, pending-command cleanup, and reconnect notifications.
+- Command retry and passive state verification for power changes.
+- Gateway diagnostics sensor, Home Assistant diagnostics export, and firmware update entities.
+- Stale device cleanup service for devices no longer present in topology.
+- Test suite under `tests/components/yeelight_pro/` with 180+ tests.
 
-### Device Support
-- **Lights** — full control (brightness, color temperature, RGB, transitions)
-- **Climate** — air conditioners via Yeelight Pro
-- **Covers** — curtains and blinds
-- **Switches** — wall switches, panels, relays
-- **Sensors** — motion, contact, illumination, temperature, humidity
-- **Buttons** — scene buttons and panel controls
-- **Groups** — light groups from gateway
+## Supported Platforms
 
-### Monitoring & Diagnostics
-- **Entity availability** based on device online status
-- **Gateway connection** status as dedicated binary sensor
-- **Firmware update** entity showing available updates
-- **Event bus integration** for automations
+The integration currently forwards these Home Assistant platforms:
 
-### Reliability
-- **Configurable keepalive** (10-300 seconds)
-- **Reconnect notifications** with persistent alerts
-- **Automatic device discovery** from gateway topology
-- **Stale device removal** service
+- `light`
+- `switch`
+- `binary_sensor`
+- `sensor`
+- `number`
+- `button`
+- `cover`
+- `climate`
+- `update`
 
-### Automation Support
-- Custom services: `send_command`, `mock_incoming_message`, `remove_stale_devices`
-- Full entity state exposure for triggers and conditions
-- Event bus publishing for advanced automations
-- Works with scripts, automations, and voice assistants
+## Supported Devices and Entities
+
+Entity creation is based on the gateway topology and each device's reported properties.
+
+| Device area | Supported behavior |
+|-------------|--------------------|
+| Gateway | Connection binary sensor, firmware update entity, diagnostics sensor |
+| Lights | On/off, brightness, color temperature, RGB, transition duration, delayed-off number |
+| Light groups | Group light entities with capability detection from members where possible |
+| Switch panels and relays | One or more switch entities, panel action sensor, optional backlight light |
+| WiFi panels | Two relay switches and action sensor |
+| Motion and presence sensors | Motion binary sensor, event sensors, optional luminance sensor for supported presence devices |
+| Contact sensors | Contact binary sensor and open/close events |
+| Knobs and switch sensors | Action sensor and button/knob events |
+| Covers | Open, close, stop, position, current position, optional reverse switch |
+| Air conditioners | HVAC mode, target/current temperature, fan mode, turn on/off |
+| Scenes | Scene buttons created from gateway scene topology |
+
+Unsupported device types are ignored and logged as unsupported.
 
 ## Installation
 
-### Option 1 — via HACS (Recommended)
+### HACS
 
-1. Open **HACS** → **Integrations** → **⋮** (menu) → **Custom repositories**
-2. Add repository URL: `https://github.com/rdscoo1/yeelight-pro.git`
-3. Select **Integration** as the category
-4. Click **Add**, then find **Yeelight Pro** and click **Install**
-5. Restart Home Assistant
+1. Open **HACS** -> **Integrations** -> **Custom repositories**.
+2. Add `https://github.com/rdscoo1/yeelight-pro.git`.
+3. Select **Integration** as the category.
+4. Install **Yeelight Pro**.
+5. Restart Home Assistant.
 
-### Option 2 — Manual Installation
+### Manual
 
-1. Download the latest release from [GitHub Releases](https://github.com/rdscoo1/yeelight-pro/releases)
-2. Copy `custom_components/yeelight_pro` to your `/config/custom_components/` directory
-3. Restart Home Assistant
+1. Download the latest release from [GitHub Releases](https://github.com/rdscoo1/yeelight-pro/releases).
+2. Copy `custom_components/yeelight_pro` into `/config/custom_components/`.
+3. Restart Home Assistant.
 
 ## Configuration
 
-1. Go to **Settings** → **Devices & Services** → **Add Integration**
-2. Search for **Yeelight Pro**
-3. Enter your gateway IP address (e.g., `192.168.1.100`)
-4. All connected devices will appear automatically
+### UI setup
+
+1. Go to **Settings** -> **Devices & services** -> **Add integration**.
+2. Search for **Yeelight Pro**.
+3. Enter the gateway IP address.
+4. Choose gateway type:
+   - `Gateway Pro`
+   - `Wifi Panel`
+5. The integration checks that the TCP endpoint is reachable before creating the entry.
 
 ### Options
 
-After setup, you can configure:
-- **Keepalive interval** (10–300 seconds) — how often to ping the gateway
+Open the integration options to adjust:
 
-## Entities
+| Option | Default | Range / values |
+|--------|---------|----------------|
+| Host | Current host | Any hostname or IP reachable from Home Assistant |
+| Gateway type | `Gateway Pro` | `Gateway Pro`, `Wifi Panel` |
+| Port | `65443` | `1`-`65535` |
+| Keepalive | `30` seconds | `10`-`300` seconds |
+| Transition time | `5.0` seconds | `0.5`-`30.0` seconds |
 
-Each device creates entities based on its capabilities:
+Changing options reloads the config entry so the gateway client restarts with the new settings.
 
-| Platform | Entity ID Example | Description |
-|----------|-------------------|-------------|
-| `light` | `light.bedroom_ceiling` | Light control: power, brightness, color temp, RGB |
-| `climate` | `climate.living_room_ac` | AC control: mode, temperature, fan speed |
-| `cover` | `cover.bedroom_curtain` | Curtain control: open, close, position |
-| `switch` | `switch.hallway_relay` | Switch control: on/off |
-| `binary_sensor` | `binary_sensor.door_contact` | Contact sensor: open/closed |
-| `sensor` | `sensor.living_room_motion` | Motion sensor with action attribute |
-| `button` | `button.scene_movie_mode` | Scene activation button |
-| `binary_sensor` | `binary_sensor.gateway_connection` | Gateway connectivity status |
-| `update` | `update.gateway_firmware` | Firmware update availability |
+### YAML setup
+
+UI setup is recommended. YAML setup is still supported for gateway entries:
+
+```yaml
+yeelight_pro:
+  gateways:
+    - host: 192.168.1.100
+      pid: 1
+      port: 65443
+      keepalive: 30
+      transition_time: 5.0
+```
+
+`pid: 1` is Gateway Pro and `pid: 2` is WiFi Panel.
 
 ## Services
 
-### send_command
+### `yeelight_pro.send_command`
 
-Send a raw command to the gateway and optionally show the result as a persistent notification.
+Send a raw command to a gateway. The result is also fired on the Home Assistant event bus as `yeelight_pro.send_command`.
 
 ```yaml
 service: yeelight_pro.send_command
@@ -101,9 +129,19 @@ data:
   throw: true
 ```
 
-### mock_incoming_message
+Fields:
 
-Mock an incoming JSON message from the gateway for testing.
+| Field | Required | Description |
+|-------|----------|-------------|
+| `host` | Yes | Gateway host to send to |
+| `method` | Yes | Gateway API method |
+| `params` | No | Command parameters object |
+| `result` | No | Optional result payload override for the event/notification |
+| `throw` | No | If true, show a persistent notification with the result |
+
+### `yeelight_pro.mock_incoming_message`
+
+Inject a JSON gateway message into the message handler for debugging.
 
 ```yaml
 service: yeelight_pro.mock_incoming_message
@@ -114,25 +152,97 @@ data:
      "nodes": [{"params": {}, "value": "motion.false", "id": 301809111, "nt": 2}]}
 ```
 
-### remove_stale_devices
+Invalid JSON and non-object JSON payloads are rejected with a persistent notification.
 
-Remove devices that are no longer present in the gateway topology.
+### `yeelight_pro.remove_stale_devices`
+
+Remove device registry entries for devices that are no longer present in the gateway topology. Use `dry_run: true` first to preview the cleanup.
 
 ```yaml
 service: yeelight_pro.remove_stale_devices
 data:
-  host: 192.168.1.100  # Optional, removes from all gateways if not specified
-  dry_run: true  # Optional, shows what would be removed without actually removing
+  host: 192.168.1.100
+  dry_run: true
 ```
 
-## Automation Examples
+`host` is optional. When omitted, all configured gateways are checked.
 
-### 1. Turn on Light When Motion Detected
+### `light.prestage_color_temp`
+
+Set color temperature on a Yeelight Pro light while keeping the light off. This is an entity service registered on the `light` platform.
+
+```yaml
+service: light.prestage_color_temp
+target:
+  entity_id: light.bedroom_ceiling
+data:
+  color_temp_kelvin: 2700
+```
+
+## Events
+
+Device events are fired on the Home Assistant bus as `yeelight_pro_event`.
+
+Event data includes:
+
+- `device_id`
+- `device_name`
+- `device_type`
+- `event_type`
+- `params`
+- `decoded`
+- `gateway_host`
+
+Example automation:
 
 ```yaml
 automation:
-  - alias: "Motion: Turn on hallway light"
-    description: "Turn on light when motion is detected"
+  - alias: "Yeelight panel action"
+    trigger:
+      - platform: event
+        event_type: yeelight_pro_event
+        event_data:
+          event_type: panel.click
+    action:
+      - service: light.toggle
+        target:
+          entity_id: light.living_room_main
+```
+
+## Reliability and Diagnostics
+
+The gateway client is designed for long-running local connections:
+
+- TCP reconnect loop with exponential backoff from 1 to 60 seconds.
+- Keepalive pings using `gateway_get.node` or `device_get.node`.
+- Reconnect after consecutive keepalive failures.
+- Reconnect after repeated malformed JSON messages.
+- Read buffer limit to avoid unbounded memory growth from incomplete payloads.
+- Command retry for most write/query methods.
+- Topology cache with 5 minute TTL.
+- State reconciliation after reconnect.
+- Removed topology devices are marked unavailable, not deleted, so entity IDs are preserved.
+- Passive state verification retries power commands when the gateway reports a mismatched state.
+
+The gateway diagnostics sensor reports connection health as:
+
+- `OK`
+- `Degraded`
+- `Poor`
+- `Disconnected`
+- `No Gateway`
+
+Diagnostics attributes include uptime, message counts, command success/failure counts, retry counts, success rate, reconnect count, keepalive results, last error, transition time, and topology cache age.
+
+Home Assistant config-entry diagnostics are also implemented and redact host values.
+
+## Automation Examples
+
+### Turn on a light when motion is detected
+
+```yaml
+automation:
+  - alias: "Motion: hallway light"
     trigger:
       - platform: state
         entity_id: binary_sensor.hallway_motion
@@ -145,96 +255,20 @@ automation:
           brightness: 255
 ```
 
-### 2. Panel Button Control
+### Prestage color temperature before turning on a light
 
 ```yaml
 automation:
-  - alias: "Panel: Toggle living room light"
-    description: "Toggle light on single button press"
-    trigger:
-      - platform: state
-        entity_id: sensor.living_room_panel_action
-        to: "button1_single"
-    action:
-      - service: light.toggle
-        target:
-          entity_id: light.living_room_main
-```
-
-### 3. Climate Control Based on Temperature
-
-```yaml
-automation:
-  - alias: "Climate: Cool down when hot"
-    description: "Turn on AC when temperature exceeds threshold"
-    trigger:
-      - platform: numeric_state
-        entity_id: sensor.living_room_temperature
-        above: 26
-    action:
-      - service: climate.set_hvac_mode
-        target:
-          entity_id: climate.living_room_ac
-        data:
-          hvac_mode: cool
-      - service: climate.set_temperature
-        target:
-          entity_id: climate.living_room_ac
-        data:
-          temperature: 23
-```
-
-### 4. Gateway Reconnect Alert
-
-```yaml
-automation:
-  - alias: "Gateway: Reconnect notification"
-    description: "Send notification when gateway reconnects"
-    trigger:
-      - platform: state
-        entity_id: binary_sensor.gateway_connection
-        from: "off"
-        to: "on"
-    action:
-      - service: notify.mobile_app
-        data:
-          message: "Yeelight Pro gateway reconnected"
-```
-
-### 5. Light Group Control
-
-```yaml
-automation:
-  - alias: "Group: All lights off at night"
-    description: "Turn off all light groups at bedtime"
-    trigger:
-      - platform: time
-        at: "23:00:00"
-    action:
-      - service: light.turn_off
-        target:
-          entity_id: light.yp_group_1_light
-```
-
-### 6. Prestage Color Temperature Before Turning On
-
-Use the `prestage_color_temp` service to set color temperature while the light is OFF, then turn it on. This ensures the light turns on with the desired color temperature immediately.
-
-```yaml
-automation:
-  - alias: "Light: Warm morning light"
-    description: "Set warm color temperature before turning on morning light"
+  - alias: "Light: warm morning start"
     trigger:
       - platform: time
         at: "07:00:00"
     action:
-      # First, set color temperature while light is OFF
-      - service: yeelight_pro.prestage_color_temp
+      - service: light.prestage_color_temp
         target:
           entity_id: light.bedroom_ceiling
         data:
-          color_temp_kelvin: 2700  # Warm white
-      # Then turn on the light
+          color_temp_kelvin: 2700
       - service: light.turn_on
         target:
           entity_id: light.bedroom_ceiling
@@ -242,19 +276,28 @@ automation:
           brightness: 128
 ```
 
+### Preview stale registry cleanup
+
+```yaml
+service: yeelight_pro.remove_stale_devices
+data:
+  dry_run: true
+```
+
 ## Troubleshooting
 
-| Problem | Cause | Solution |
-|---------|-------|----------|
-| Integration fails to load | Old or corrupted files | Reinstall from HACS |
-| Cannot connect to gateway | Wrong IP or network issue | Verify gateway IP and network connectivity |
-| Device shows unavailable | Device offline or disconnected | Check device power and connection |
-| Entities not appearing | Device not in topology | Check gateway app and device pairing |
-| Deprecated warnings | Using old constants | Update to latest version |
+| Problem | What to check |
+|---------|---------------|
+| Cannot add integration | Verify gateway IP, port `65443`, network reachability, and selected gateway type |
+| Gateway becomes unavailable | Check local network stability and gateway power |
+| Device entity unavailable | Device disappeared from topology or reports offline |
+| Device is missing | Check pairing/topology in the Yeelight Pro app, then reload the integration |
+| Stale device remains in registry | Run `yeelight_pro.remove_stale_devices` with `dry_run: true`, then without dry run |
+| Raw command does nothing | Use `yeelight_pro.send_command` with `throw: true` and enable debug logging |
 
-### Enable Debug Logging
+### Debug logging
 
-Add to `configuration.yaml`:
+Add this to `configuration.yaml`:
 
 ```yaml
 logger:
@@ -264,66 +307,55 @@ logger:
     custom_components.yeelight_pro.core: debug
 ```
 
-View logs at: **Settings** → **System** → **Logs** → filter by `yeelight_pro`
+Then open **Settings** -> **System** -> **Logs** and filter by `yeelight_pro`.
 
 ## Development
 
-### Local Setup
+### Local setup
 
 ```bash
 git clone https://github.com/rdscoo1/yeelight-pro.git
 cd yeelight-pro
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\Activate.ps1
+source .venv/bin/activate
 pip install -r requirements-dev.txt
 ```
 
-### Running Tests
+### Tests
 
 ```bash
-pytest              # Quick run
-pytest -vv          # Verbose output
-pytest --cov        # With coverage report
+pytest -q
+pytest -q --cov=custom_components/yeelight_pro --cov-report=term-missing
 ```
 
-### Test Coverage
+Tests live in `tests/components/yeelight_pro/` and use `pytest-homeassistant-custom-component` for Home Assistant fixtures.
 
-The test suite includes **100+ tests** covering:
+CI runs:
 
-| Module | Coverage |
-|--------|----------|
-| `__init__.py` | Setup, coordinator, entity management |
-| `core/device.py` | Device classes, converters, state updates |
-| `core/gateway.py` | TCP connection, message parsing, keepalive |
-| `light.py` | Light entity, color modes, transitions |
-| `binary_sensor.py` | Binary sensors, gateway connection |
-| `config_flow.py` | Config and options flow |
-| `update.py` | Firmware update entities |
+- HACS validation
+- hassfest
+- pytest on Python 3.11 and 3.12
+- coverage upload to Codecov
 
-### CI/CD
+### Release checklist
 
-This repository uses GitHub Actions for:
-- **pytest** — automated testing on Python 3.11 and 3.12
-- **HACS validation** — ensures HACS compatibility
-- **hassfest** — validates Home Assistant manifest
+1. Update `version` in `custom_components/yeelight_pro/manifest.json`.
+2. Update release notes/changelog.
+3. Commit and tag:
 
-### Releasing
-
-1. Update `version` in `manifest.json`
-2. Commit and push changes
-3. Create a tag:
    ```bash
-   git tag -a v0.3.0 -m "Release 0.3.0"
+   git tag -a v1.3.5 -m "Release 1.3.5"
    git push --tags
    ```
-4. Create a GitHub Release
+
+4. Create a GitHub Release.
 
 ## Credits
 
 | Role | Contributor |
 |------|-------------|
-| Lead Developer | [@rdscoo1](https://github.com/rdscoo1) |
-| Original Integration | [@hasscc](https://github.com/hasscc) |
+| Lead developer | [@rdscoo1](https://github.com/rdscoo1) |
+| Original integration | [@hasscc](https://github.com/hasscc) |
 | Platform | [Yeelight](https://www.yeelight.com/) |
 
 ## License

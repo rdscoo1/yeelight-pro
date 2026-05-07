@@ -6,90 +6,118 @@
 
 [English](README.md) | **Русский**
 
-## Обзор
+Yeelight Pro — локальная push-интеграция Home Assistant для шлюзов Yeelight Pro и WiFi Panel. Интеграция подключается к устройству по локальному TCP API, читает топологию шлюза, создает сущности Home Assistant для поддерживаемых устройств и обновляет их состояние из push-сообщений шлюза.
 
-Yeelight Pro — это пользовательская интеграция для [Home Assistant](https://www.home-assistant.io/), которая подключает ваш **Yeelight Pro Gateway** и все подключенные устройства к экосистеме Home Assistant. Она обеспечивает полный контроль и мониторинг освещения, датчиков, выключателей, климатических устройств и многого другого через локальное TCP-соединение.
+Текущая версия интеграции: **1.3.5**.
 
-> 🧩 Изначально разработано [@hasscc](https://github.com/hasscc), полностью переработано и модернизировано [@rdscoo1](https://github.com/rdscoo1) с улучшенной стабильностью, комплексной диагностикой и более 100 автоматизированных тестов.
+## Главное
 
-## Возможности
+- Локальное TCP-подключение без облачного опроса и без внешних Python-зависимостей.
+- UI config flow для типов шлюза **Gateway Pro** и **WiFi Panel**.
+- Автоматическое обнаружение устройств, групп, сцен и сущностей шлюза из топологии.
+- Переподключение с экспоненциальной задержкой, keepalive-проверки, очистка ожидающих команд и уведомления о переподключении.
+- Повтор команд и пассивная проверка состояния для команд включения/выключения.
+- Диагностический сенсор шлюза, diagnostics export Home Assistant и сущности обновления прошивки.
+- Сервис очистки устаревших устройств, которых больше нет в топологии.
+- Тесты расположены в `tests/components/yeelight_pro/`; в наборе более 180 тестов.
 
-### Поддержка устройств
-- **Освещение** — полный контроль (яркость, цветовая температура, RGB, переходы)
-- **Климат** — кондиционеры через Yeelight Pro
-- **Шторы** — управление шторами и жалюзи
-- **Выключатели** — настенные выключатели, панели, реле
-- **Датчики** — движения, открытия, освещенности, температуры, влажности
-- **Кнопки** — кнопки сцен и управления панелями
-- **Группы** — группы освещения из шлюза
+## Поддерживаемые платформы
 
-### Мониторинг и диагностика
-- **Доступность устройств** на основе статуса онлайн
-- **Статус подключения шлюза** как отдельный бинарный датчик
-- **Обновление прошивки** — сущность, показывающая доступные обновления
-- **Интеграция с шиной событий** для автоматизаций
+Интеграция подключает следующие платформы Home Assistant:
 
-### Надежность
-- **Настраиваемый keepalive** (10-300 секунд)
-- **Уведомления о переподключении** с постоянными оповещениями
-- **Автоматическое обнаружение устройств** из топологии шлюза
-- **Сервис удаления устаревших устройств**
+- `light`
+- `switch`
+- `binary_sensor`
+- `sensor`
+- `number`
+- `button`
+- `cover`
+- `climate`
+- `update`
 
-### Поддержка автоматизаций
-- Пользовательские сервисы: `send_command`, `mock_incoming_message`, `remove_stale_devices`, `prestage_color_temp`
-- Полное отображение состояния сущностей для триггеров и условий
-- Публикация в шину событий для продвинутых автоматизаций
-- Работает со скриптами, автоматизациями и голосовыми помощниками
+## Поддерживаемые устройства и сущности
+
+Сущности создаются на основе топологии шлюза и свойств, которые сообщает устройство.
+
+| Область | Поддерживаемое поведение |
+|---------|--------------------------|
+| Шлюз | Бинарный сенсор подключения, сущность обновления прошивки, диагностический сенсор |
+| Свет | Вкл/выкл, яркость, цветовая температура, RGB, длительность перехода, число delay-off |
+| Группы света | Групповые light-сущности с определением возможностей по участникам, когда это возможно |
+| Панели и реле | Одна или несколько switch-сущностей, сенсор действий панели, опциональная подсветка как light |
+| WiFi Panel | Два реле и сенсор действий |
+| Датчики движения и присутствия | Бинарный сенсор движения, события, опциональный сенсор освещенности для поддерживаемых датчиков присутствия |
+| Датчики открытия | Бинарный сенсор контакта и события открытия/закрытия |
+| Крутилки и сенсорные выключатели | Сенсор действий и события кнопок/крутилки |
+| Шторы | Открыть, закрыть, стоп, позиция, текущая позиция, опциональный reverse switch |
+| Кондиционеры | HVAC-режим, целевая/текущая температура, режим вентилятора, включение/выключение |
+| Сцены | Кнопки сцен из топологии шлюза |
+
+Неподдерживаемые типы устройств игнорируются и записываются в лог.
 
 ## Установка
 
-### Вариант 1 — через HACS (рекомендуется)
+### HACS
 
-1. Откройте **HACS** → **Интеграции** → **⋮** (меню) → **Пользовательские репозитории**
-2. Добавьте URL репозитория: `https://github.com/rdscoo1/yeelight-pro.git`
-3. Выберите **Integration** в качестве категории
-4. Нажмите **Добавить**, затем найдите **Yeelight Pro** и нажмите **Установить**
-5. Перезапустите Home Assistant
+1. Откройте **HACS** -> **Integrations** -> **Custom repositories**.
+2. Добавьте `https://github.com/rdscoo1/yeelight-pro.git`.
+3. Выберите категорию **Integration**.
+4. Установите **Yeelight Pro**.
+5. Перезапустите Home Assistant.
 
-### Вариант 2 — Ручная установка
+### Ручная установка
 
-1. Скачайте последний релиз с [GitHub Releases](https://github.com/rdscoo1/yeelight-pro/releases)
-2. Скопируйте `custom_components/yeelight_pro` в ваш каталог `/config/custom_components/`
-3. Перезапустите Home Assistant
+1. Скачайте последний релиз из [GitHub Releases](https://github.com/rdscoo1/yeelight-pro/releases).
+2. Скопируйте `custom_components/yeelight_pro` в `/config/custom_components/`.
+3. Перезапустите Home Assistant.
 
 ## Настройка
 
-1. Перейдите в **Настройки** → **Устройства и службы** → **Добавить интеграцию**
-2. Найдите **Yeelight Pro**
-3. Введите IP-адрес вашего шлюза (например, `192.168.1.100`)
-4. Все подключенные устройства появятся автоматически
+### Настройка через UI
+
+1. Откройте **Настройки** -> **Устройства и службы** -> **Добавить интеграцию**.
+2. Найдите **Yeelight Pro**.
+3. Введите IP-адрес шлюза.
+4. Выберите тип шлюза:
+   - `Gateway Pro`
+   - `Wifi Panel`
+5. Перед созданием записи интеграция проверит доступность TCP endpoint.
 
 ### Опции
 
-После настройки вы можете настроить:
-- **Интервал keepalive** (10–300 секунд) — как часто пинговать шлюз
+В опциях интеграции можно изменить:
 
-## Сущности
+| Опция | Значение по умолчанию | Диапазон / значения |
+|-------|------------------------|---------------------|
+| Host | Текущий host | Любой hostname или IP, доступный Home Assistant |
+| Тип шлюза | `Gateway Pro` | `Gateway Pro`, `Wifi Panel` |
+| Port | `65443` | `1`-`65535` |
+| Keepalive | `30` секунд | `10`-`300` секунд |
+| Transition time | `5.0` секунд | `0.5`-`30.0` секунд |
 
-Каждое устройство создает сущности в зависимости от своих возможностей:
+Изменение опций перезагружает config entry, чтобы TCP-клиент шлюза перезапустился с новыми настройками.
 
-| Платформа | Пример Entity ID | Описание |
-|-----------|------------------|----------|
-| `light` | `light.bedroom_ceiling` | Управление светом: питание, яркость, цветовая температура, RGB |
-| `climate` | `climate.living_room_ac` | Управление кондиционером: режим, температура, скорость вентилятора |
-| `cover` | `cover.bedroom_curtain` | Управление шторами: открыть, закрыть, позиция |
-| `switch` | `switch.hallway_relay` | Управление выключателем: вкл/выкл |
-| `binary_sensor` | `binary_sensor.door_contact` | Датчик открытия: открыто/закрыто |
-| `sensor` | `sensor.living_room_motion` | Датчик движения с атрибутом действия |
-| `button` | `button.scene_movie_mode` | Кнопка активации сцены |
-| `binary_sensor` | `binary_sensor.gateway_connection` | Статус подключения шлюза |
-| `update` | `update.gateway_firmware` | Доступность обновления прошивки |
+### Настройка через YAML
+
+Рекомендуется настройка через UI. YAML все еще поддерживается для записей шлюза:
+
+```yaml
+yeelight_pro:
+  gateways:
+    - host: 192.168.1.100
+      pid: 1
+      port: 65443
+      keepalive: 30
+      transition_time: 5.0
+```
+
+`pid: 1` — Gateway Pro, `pid: 2` — WiFi Panel.
 
 ## Сервисы
 
-### send_command
+### `yeelight_pro.send_command`
 
-Отправить сырую команду на шлюз и опционально показать результат в виде постоянного уведомления.
+Отправляет сырую команду на шлюз. Результат также публикуется в шину событий Home Assistant как `yeelight_pro.send_command`.
 
 ```yaml
 service: yeelight_pro.send_command
@@ -101,9 +129,19 @@ data:
   throw: true
 ```
 
-### mock_incoming_message
+Поля:
 
-Имитировать входящее JSON-сообщение от шлюза для тестирования.
+| Поле | Обязательное | Описание |
+|------|--------------|----------|
+| `host` | Да | Host шлюза, на который отправляется команда |
+| `method` | Да | Метод Gateway API |
+| `params` | Нет | Объект параметров команды |
+| `result` | Нет | Опциональная подмена результата для события/уведомления |
+| `throw` | Нет | Если true, показать persistent notification с результатом |
+
+### `yeelight_pro.mock_incoming_message`
+
+Передает JSON-сообщение в обработчик сообщений шлюза для отладки.
 
 ```yaml
 service: yeelight_pro.mock_incoming_message
@@ -114,37 +152,97 @@ data:
      "nodes": [{"params": {}, "value": "motion.false", "id": 301809111, "nt": 2}]}
 ```
 
-### remove_stale_devices
+Некорректный JSON и JSON не в виде объекта отклоняются с persistent notification.
 
-Удалить устройства, которые больше не присутствуют в топологии шлюза.
+### `yeelight_pro.remove_stale_devices`
+
+Удаляет записи из device registry для устройств, которых больше нет в топологии шлюза. Сначала используйте `dry_run: true`, чтобы посмотреть, что будет удалено.
 
 ```yaml
 service: yeelight_pro.remove_stale_devices
 data:
-  host: 192.168.1.100  # Опционально, удаляет со всех шлюзов, если не указано
-  dry_run: true  # Опционально, показывает что будет удалено без фактического удаления
+  host: 192.168.1.100
+  dry_run: true
 ```
 
-### prestage_color_temp
+`host` опционален. Если он не указан, проверяются все настроенные шлюзы.
 
-Установить цветовую температуру света, когда он **выключен** (без изменения состояния питания). Это позволяет предварительно настроить температуру света перед включением.
+### `light.prestage_color_temp`
+
+Устанавливает цветовую температуру Yeelight Pro light-сущности, не включая свет. Это entity service, зарегистрированный на платформе `light`.
 
 ```yaml
-service: yeelight_pro.prestage_color_temp
+service: light.prestage_color_temp
 target:
   entity_id: light.bedroom_ceiling
 data:
-  color_temp_kelvin: 2700  # Теплый белый
+  color_temp_kelvin: 2700
 ```
 
-## Примеры автоматизаций
+## События
 
-### 1. Включить свет при обнаружении движения
+События устройств публикуются в шину Home Assistant как `yeelight_pro_event`.
+
+Данные события включают:
+
+- `device_id`
+- `device_name`
+- `device_type`
+- `event_type`
+- `params`
+- `decoded`
+- `gateway_host`
+
+Пример автоматизации:
 
 ```yaml
 automation:
-  - alias: "Движение: Включить свет в коридоре"
-    description: "Включить свет при обнаружении движения"
+  - alias: "Yeelight panel action"
+    trigger:
+      - platform: event
+        event_type: yeelight_pro_event
+        event_data:
+          event_type: panel.click
+    action:
+      - service: light.toggle
+        target:
+          entity_id: light.living_room_main
+```
+
+## Надежность и диагностика
+
+TCP-клиент шлюза рассчитан на длительную локальную работу:
+
+- Цикл переподключения с экспоненциальной задержкой от 1 до 60 секунд.
+- Keepalive-пинги через `gateway_get.node` или `device_get.node`.
+- Переподключение после нескольких keepalive-ошибок подряд.
+- Переподключение после повторяющихся некорректных JSON-сообщений.
+- Лимит буфера чтения, чтобы незавершенные payload не росли бесконечно.
+- Повтор большинства write/query команд.
+- Кэш топологии с TTL 5 минут.
+- Сверка состояния после переподключения.
+- Устройства, исчезнувшие из топологии, помечаются недоступными, но не удаляются, чтобы сохранить entity ID.
+- Пассивная проверка состояния повторяет power-команды, если шлюз сообщил несовпадающее состояние.
+
+Диагностический сенсор шлюза показывает состояние:
+
+- `OK`
+- `Degraded`
+- `Poor`
+- `Disconnected`
+- `No Gateway`
+
+Атрибуты диагностики включают uptime, количество сообщений, успешные/неуспешные команды, повторы, success rate, количество переподключений, keepalive-результаты, последнюю ошибку, transition time и возраст кэша топологии.
+
+Также реализован Home Assistant diagnostics export для config entry; значения host редактируются.
+
+## Примеры автоматизаций
+
+### Включить свет при движении
+
+```yaml
+automation:
+  - alias: "Motion: hallway light"
     trigger:
       - platform: state
         entity_id: binary_sensor.hallway_motion
@@ -157,96 +255,20 @@ automation:
           brightness: 255
 ```
 
-### 2. Управление кнопкой панели
+### Предустановить цветовую температуру перед включением
 
 ```yaml
 automation:
-  - alias: "Панель: Переключить свет в гостиной"
-    description: "Переключить свет при одинарном нажатии кнопки"
-    trigger:
-      - platform: state
-        entity_id: sensor.living_room_panel_action
-        to: "button1_single"
-    action:
-      - service: light.toggle
-        target:
-          entity_id: light.living_room_main
-```
-
-### 3. Управление климатом на основе температуры
-
-```yaml
-automation:
-  - alias: "Климат: Охладить при жаре"
-    description: "Включить кондиционер при превышении порога температуры"
-    trigger:
-      - platform: numeric_state
-        entity_id: sensor.living_room_temperature
-        above: 26
-    action:
-      - service: climate.set_hvac_mode
-        target:
-          entity_id: climate.living_room_ac
-        data:
-          hvac_mode: cool
-      - service: climate.set_temperature
-        target:
-          entity_id: climate.living_room_ac
-        data:
-          temperature: 23
-```
-
-### 4. Оповещение о переподключении шлюза
-
-```yaml
-automation:
-  - alias: "Шлюз: Уведомление о переподключении"
-    description: "Отправить уведомление при переподключении шлюза"
-    trigger:
-      - platform: state
-        entity_id: binary_sensor.gateway_connection
-        from: "off"
-        to: "on"
-    action:
-      - service: notify.mobile_app
-        data:
-          message: "Шлюз Yeelight Pro переподключен"
-```
-
-### 5. Управление группой освещения
-
-```yaml
-automation:
-  - alias: "Группа: Выключить все светильники на ночь"
-    description: "Выключить все группы освещения перед сном"
-    trigger:
-      - platform: time
-        at: "23:00:00"
-    action:
-      - service: light.turn_off
-        target:
-          entity_id: light.yp_group_1_light
-```
-
-### 6. Предустановка цветовой температуры перед включением
-
-Используйте сервис `prestage_color_temp` для установки цветовой температуры, когда свет выключен, затем включите его. Это гарантирует, что свет включится с желаемой цветовой температурой сразу.
-
-```yaml
-automation:
-  - alias: "Свет: Теплый утренний свет"
-    description: "Установить теплую цветовую температуру перед включением утреннего света"
+  - alias: "Light: warm morning start"
     trigger:
       - platform: time
         at: "07:00:00"
     action:
-      # Сначала установить цветовую температуру, когда свет ВЫКЛЮЧЕН
-      - service: yeelight_pro.prestage_color_temp
+      - service: light.prestage_color_temp
         target:
           entity_id: light.bedroom_ceiling
         data:
-          color_temp_kelvin: 2700  # Теплый белый
-      # Затем включить свет
+          color_temp_kelvin: 2700
       - service: light.turn_on
         target:
           entity_id: light.bedroom_ceiling
@@ -254,78 +276,26 @@ automation:
           brightness: 128
 ```
 
-### 7. Адаптивное освещение в течение дня
-
-Автоматически меняйте цветовую температуру в зависимости от времени суток:
+### Предпросмотр очистки устаревших устройств
 
 ```yaml
-automation:
-  - alias: "Свет: Адаптивная температура"
-    description: "Изменение цветовой температуры в течение дня"
-    trigger:
-      - platform: time
-        at: "06:00:00"
-        id: morning
-      - platform: time
-        at: "12:00:00"
-        id: noon
-      - platform: time
-        at: "18:00:00"
-        id: evening
-      - platform: time
-        at: "22:00:00"
-        id: night
-    action:
-      - choose:
-          - conditions:
-              - condition: trigger
-                id: morning
-            sequence:
-              - service: yeelight_pro.prestage_color_temp
-                target:
-                  entity_id: light.living_room_main
-                data:
-                  color_temp_kelvin: 4000  # Нейтральный белый
-          - conditions:
-              - condition: trigger
-                id: noon
-            sequence:
-              - service: light.turn_on
-                target:
-                  entity_id: light.living_room_main
-                data:
-                  color_temp_kelvin: 5500  # Холодный белый
-          - conditions:
-              - condition: trigger
-                id: evening
-            sequence:
-              - service: light.turn_on
-                target:
-                  entity_id: light.living_room_main
-                data:
-                  color_temp_kelvin: 3500  # Теплый нейтральный
-          - conditions:
-              - condition: trigger
-                id: night
-            sequence:
-              - service: yeelight_pro.prestage_color_temp
-                target:
-                  entity_id: light.living_room_main
-                data:
-                  color_temp_kelvin: 2700  # Теплый белый
+service: yeelight_pro.remove_stale_devices
+data:
+  dry_run: true
 ```
 
 ## Устранение неполадок
 
-| Проблема | Причина | Решение |
-|----------|---------|---------|
-| Интеграция не загружается | Старые или поврежденные файлы | Переустановите через HACS |
-| Не удается подключиться к шлюзу | Неверный IP или проблема с сетью | Проверьте IP шлюза и сетевое подключение |
-| Устройство показывает недоступно | Устройство офлайн или отключено | Проверьте питание и подключение устройства |
-| Сущности не появляются | Устройство не в топологии | Проверьте приложение шлюза и сопряжение устройства |
-| Предупреждения об устаревании | Использование старых констант | Обновите до последней версии |
+| Проблема | Что проверить |
+|----------|---------------|
+| Интеграция не добавляется | IP шлюза, порт `65443`, доступность в сети и выбранный тип шлюза |
+| Шлюз становится недоступным | Стабильность локальной сети и питание шлюза |
+| Сущность устройства недоступна | Устройство исчезло из топологии или сообщает offline |
+| Устройство не появилось | Проверьте привязку и топологию в приложении Yeelight Pro, затем перезагрузите интеграцию |
+| В registry остались старые устройства | Запустите `yeelight_pro.remove_stale_devices` с `dry_run: true`, затем без dry run |
+| Сырая команда ничего не делает | Используйте `yeelight_pro.send_command` с `throw: true` и включите debug-логирование |
 
-### Включить отладочное логирование
+### Отладочное логирование
 
 Добавьте в `configuration.yaml`:
 
@@ -337,7 +307,7 @@ logger:
     custom_components.yeelight_pro.core: debug
 ```
 
-Просмотр логов: **Настройки** → **Система** → **Логи** → фильтр по `yeelight_pro`
+Затем откройте **Настройки** -> **Система** -> **Логи** и отфильтруйте по `yeelight_pro`.
 
 ## Разработка
 
@@ -347,49 +317,38 @@ logger:
 git clone https://github.com/rdscoo1/yeelight-pro.git
 cd yeelight-pro
 python3 -m venv .venv
-source .venv/bin/activate  # На Windows: .venv\Scripts\Activate.ps1
+source .venv/bin/activate
 pip install -r requirements-dev.txt
 ```
 
-### Запуск тестов
+### Тесты
 
 ```bash
-pytest              # Быстрый запуск
-pytest -vv          # Подробный вывод
-pytest --cov        # С отчетом о покрытии
+pytest -q
+pytest -q --cov=custom_components/yeelight_pro --cov-report=term-missing
 ```
 
-### Покрытие тестами
+Тесты находятся в `tests/components/yeelight_pro/` и используют `pytest-homeassistant-custom-component` для фикстур Home Assistant.
 
-Набор тестов включает **более 100 тестов**, охватывающих:
+CI запускает:
 
-| Модуль | Покрытие |
-|--------|----------|
-| `__init__.py` | Настройка, координатор, управление сущностями |
-| `core/device.py` | Классы устройств, конвертеры, обновления состояния |
-| `core/gateway.py` | TCP-соединение, парсинг сообщений, keepalive |
-| `light.py` | Сущность освещения, цветовые режимы, переходы |
-| `binary_sensor.py` | Бинарные датчики, подключение шлюза |
-| `config_flow.py` | Поток настройки и опций |
-| `update.py` | Сущности обновления прошивки |
+- HACS validation
+- hassfest
+- pytest на Python 3.11 и 3.12
+- загрузку покрытия в Codecov
 
-### CI/CD
+### Чеклист релиза
 
-Этот репозиторий использует GitHub Actions для:
-- **pytest** — автоматизированное тестирование на Python 3.11 и 3.12
-- **HACS validation** — проверка совместимости с HACS
-- **hassfest** — валидация манифеста Home Assistant
+1. Обновите `version` в `custom_components/yeelight_pro/manifest.json`.
+2. Обновите release notes/changelog.
+3. Создайте commit и tag:
 
-### Создание релиза
-
-1. Обновите `version` в `manifest.json`
-2. Закоммитьте и запушьте изменения
-3. Создайте тег:
    ```bash
-   git tag -a v1.0.0 -m "Release 1.0.0"
+   git tag -a v1.3.5 -m "Release 1.3.5"
    git push --tags
    ```
-4. Создайте GitHub Release
+
+4. Создайте GitHub Release.
 
 ## Благодарности
 
@@ -401,4 +360,4 @@ pytest --cov        # С отчетом о покрытии
 
 ## Лицензия
 
-Этот проект лицензирован под [MIT License](LICENSE).
+Проект распространяется под [MIT License](LICENSE).
