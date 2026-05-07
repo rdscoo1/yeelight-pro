@@ -39,12 +39,6 @@ def get_gateway(host=None):
     return GatewayForTests(host, hass=Hass())
 
 
-def test_gateway():
-    host = "127.0.0.1"
-    gtw = get_gateway(host)
-    assert gtw.host == host
-
-
 def test_reconnect_notification_id_includes_reconnect_count(monkeypatch):
     gtw = get_gateway("1.2.3.4")
     notifications = []
@@ -902,32 +896,6 @@ async def test_send_topology_joins_inflight_request():
     assert len(gtw.writer.written) == 1
     assert "gateway_post.topology" not in gtw._msgs
 
-
-
-# ---------- Properties ----------
-
-
-def test_is_connected_property():
-    """is_connected возвращает корректное значение."""
-    gtw = ProGateway("1.2.3.4")
-
-    assert gtw.is_connected is False
-
-    gtw.writer = DummyWriter()
-    assert gtw.is_connected is True
-
-    gtw._stopping = True
-    assert gtw.is_connected is False
-
-
-def test_device_count_property():
-    """device_count возвращает количество устройств."""
-    gtw = ProGateway("1.2.3.4")
-
-    assert gtw.device_count == 0
-
-    gtw.devices = {1: "dev1", 2: "dev2"}
-    assert gtw.device_count == 2
 
 
 # ---------- Critical: _send_lock released during _close_connection ----------

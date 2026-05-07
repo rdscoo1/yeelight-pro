@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from custom_components.yeelight_pro.sensor import XSensorEntity, XActionEntity
+from custom_components.yeelight_pro.sensor import XSensorEntity, XActionEntity, XDiagnosticsSensor
 from custom_components.yeelight_pro.core.converters.base import Converter
 
 
@@ -315,46 +315,29 @@ def _make_diagnostics_entity():
     return entity
 
 
-def test_update_diagnostics_sets_ok_when_connected():
-    """_update_diagnostics sets native_value='OK' when connected and success_rate >= 95."""
+@pytest.mark.parametrize(
+    ("connected", "success_rate", "expected"),
+    [
+        (True, 100, "OK"),
+        (True, 90, "Degraded"),
+        (True, 50, "Poor"),
+        (False, 100, "Disconnected"),
+    ],
+)
+def test_update_diagnostics_sets_connection_quality_state(connected, success_rate, expected):
     entity = _make_diagnostics_entity()
+    entity.device._gateway_ref.diagnostics["connected"] = connected
+    entity.device._gateway_ref.diagnostics["success_rate"] = success_rate
+
     entity._update_diagnostics()
 
-    assert entity._attr_native_value == "OK"
-    assert entity._attr_extra_state_attributes['connected'] is True
-    assert entity._attr_extra_state_attributes['device_count'] == 3
-    assert entity._attr_extra_state_attributes['messages_sent'] == 50
+    assert entity._attr_native_value == expected
+    assert entity._attr_extra_state_attributes["connected"] is connected
+    assert entity._attr_extra_state_attributes["device_count"] == 3
+    assert entity._attr_extra_state_attributes["messages_sent"] == 50
 
 
-def test_update_diagnostics_sets_degraded():
-    """_update_diagnostics sets 'Degraded' when success_rate is between 80 and 95."""
-    entity = _make_diagnostics_entity()
-    entity.device._gateway_ref.diagnostics['success_rate'] = 90
-    entity._update_diagnostics()
-
-    assert entity._attr_native_value == "Degraded"
-
-
-def test_update_diagnostics_sets_poor():
-    """_update_diagnostics sets 'Poor' when success_rate < 80."""
-    entity = _make_diagnostics_entity()
-    entity.device._gateway_ref.diagnostics['success_rate'] = 50
-    entity._update_diagnostics()
-
-    assert entity._attr_native_value == "Poor"
-
-
-def test_update_diagnostics_sets_disconnected():
-    """_update_diagnostics sets 'Disconnected' when not connected."""
-    entity = _make_diagnostics_entity()
-    entity.device._gateway_ref.diagnostics['connected'] = False
-    entity._update_diagnostics()
-
-    assert entity._attr_native_value == "Disconnected"
-
-
-def test_update_diagnostics_no_gateway():
-    """_update_diagnostics sets 'No Gateway' when _gateway_ref is missing."""
+def test_update_diagnostics_sets_no_gateway_when_reference_missing():
     entity = _make_diagnostics_entity()
     entity.device._gateway_ref = None
     entity._update_diagnostics()
@@ -362,24 +345,17 @@ def test_update_diagnostics_no_gateway():
     assert entity._attr_native_value == "No Gateway"
 
 
-def test_format_uptime_seconds():
-    from custom_components.yeelight_pro.sensor import XDiagnosticsSensor
-    assert XDiagnosticsSensor._format_uptime(45) == "45s"
-
-
-def test_format_uptime_minutes():
-    from custom_components.yeelight_pro.sensor import XDiagnosticsSensor
-    assert XDiagnosticsSensor._format_uptime(125) == "2m 5s"
-
-
-def test_format_uptime_hours():
-    from custom_components.yeelight_pro.sensor import XDiagnosticsSensor
-    assert XDiagnosticsSensor._format_uptime(3661) == "1h 1m"
-
-
-def test_format_uptime_days():
-    from custom_components.yeelight_pro.sensor import XDiagnosticsSensor
-    assert XDiagnosticsSensor._format_uptime(90061) == "1d 1h"
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (45, "45s"),
+        (125, "2m 5s"),
+        (3661, "1h 1m"),
+        (90061, "1d 1h"),
+    ],
+)
+def test_format_uptime(seconds, expected):
+    assert XDiagnosticsSensor._format_uptime(seconds) == expected
 
 
 @pytest.mark.asyncio
@@ -409,12 +385,9 @@ async def test_periodic_update_calls_update_diagnostics(monkeypatch):
             raise asyncio.CancelledError
         await original_sleep(0)
 
-    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
-
-    try:
+    with monkeypatch.context() as patch_context:
+        patch_context.setattr(asyncio, "sleep", fast_sleep)
         await entity._periodic_update()
-    except asyncio.CancelledError:
-        pass
 
     assert call_count >= 1, "_update_diagnostics should have been called at least once"
 

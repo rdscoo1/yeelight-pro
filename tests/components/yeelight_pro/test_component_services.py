@@ -1,5 +1,6 @@
 import pytest
 from homeassistant.const import CONF_HOST
+import voluptuous as vol
 
 import custom_components.yeelight_pro as yp
 from custom_components.yeelight_pro.core.const import DOMAIN, CONF_GATEWAYS
@@ -39,6 +40,12 @@ class FakeGateway(ProGateway):
     async def send(self, method, params=None, wait_result=True, **kwargs):
         self.sent.append((method, params, wait_result))
         return {"result": "ok"}
+
+
+class RaisingGateway(FakeGateway):
+    async def send(self, method, params=None, wait_result=True, **kwargs):
+        self.sent.append((method, params, wait_result))
+        raise RuntimeError("boom")
 
 
 @pytest.mark.asyncio
@@ -94,6 +101,56 @@ async def test_async_send_command_no_throw(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_async_send_command_missing_gateway_returns_none(monkeypatch):
+    hass = FakeHass()
+    monkeypatch.setattr(yp, "async_register_admin_service", lambda *a, **k: None)
+    services = yp.ComponentServices(hass)
+
+    class Call:
+        data = {
+            CONF_HOST: "9.9.9.9",
+            "method": "test_method",
+            "params": {"x": 1},
+        }
+
+    assert await services.async_send_command(Call()) is None
+    assert hass.bus.events == []
+
+
+@pytest.mark.asyncio
+async def test_async_send_command_exception_fires_result_event(monkeypatch):
+    hass = FakeHass()
+    monkeypatch.setattr(yp, "async_register_admin_service", lambda *a, **k: None)
+    monkeypatch.setattr(yp.persistent_notification, "async_create", lambda *a, **k: None)
+    gw = RaisingGateway()
+    hass.data[DOMAIN][CONF_GATEWAYS]["gw1"] = gw
+    services = yp.ComponentServices(hass)
+
+    class Call:
+        data = {
+            CONF_HOST: "1.2.3.4",
+            "method": "test_method",
+            "params": {"x": 1},
+            "throw": False,
+        }
+
+    result = await services.async_send_command(Call())
+
+    assert result == "RuntimeError('boom')"
+    assert hass.bus.events == [
+        (
+            f"{DOMAIN}.send_command",
+            {
+                "host": "1.2.3.4",
+                "method": "test_method",
+                "params": {"x": 1},
+                "result": "RuntimeError('boom')",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_async_mock_incoming_message_calls_on_message(monkeypatch):
     """Проверяем, что mock_incoming_message вызывает gtw.on_message с байтами."""
 
@@ -132,6 +189,66 @@ async def test_async_mock_incoming_message_calls_on_message(monkeypatch):
 
     # on_message должен быть вызван и получить байты utf-8
     assert called["msg"] == valid_json.encode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_async_mock_incoming_message_rejects_non_object_json(monkeypatch):
+    hass = FakeHass()
+    monkeypatch.setattr(yp, "async_register_admin_service", lambda *a, **k: None)
+    gw = FakeGateway()
+    hass.data[DOMAIN][CONF_GATEWAYS]["gw1"] = gw
+    notifications = []
+    monkeypatch.setattr(
+        yp.persistent_notification,
+        "async_create",
+        lambda *args, **kwargs: notifications.append((args, kwargs)),
+    )
+    services = yp.ComponentServices(hass)
+
+    class Call:
+        data = {CONF_HOST: "1.2.3.4", "message": "[]"}
+
+    assert await services.async_mock_incoming_message(Call()) is False
+    assert "Expected a JSON object" in notifications[0][0][1]
+
+
+@pytest.mark.asyncio
+async def test_send_command_service_call_uses_registered_schema_and_gateway(hass):
+    yp.init_integration_data(hass)
+    gw = FakeGateway()
+    hass.data[DOMAIN][CONF_GATEWAYS]["gw1"] = gw
+    events = []
+    hass.bus.async_listen(f"{DOMAIN}.send_command", lambda event: events.append(event.data))
+    yp.ComponentServices(hass)
+
+    await hass.services.async_call(
+        DOMAIN,
+        "send_command",
+        {
+            CONF_HOST: "1.2.3.4",
+            "method": "test_method",
+            "params": {"x": 1},
+            "throw": False,
+        },
+        blocking=True,
+    )
+
+    assert gw.sent == [("test_method", {"x": 1}, True)]
+    assert events[-1]["result"] == {"result": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_send_command_service_call_rejects_invalid_payload(hass):
+    yp.init_integration_data(hass)
+    yp.ComponentServices(hass)
+
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            "send_command",
+            {CONF_HOST: "1.2.3.4"},
+            blocking=True,
+        )
 
 
 # ---------- async_remove_stale_devices tests ----------
@@ -173,89 +290,29 @@ class StaleGateway(ProGateway):
         return {"ok": True}
 
 
+@pytest.mark.parametrize(
+    ("identifier_prefix", "unique_id"),
+    [
+        ("entry-1", None),
+        ("1.2.3.4", None),
+        ("1.2.3.3", "1.2.3.3"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_remove_stale_devices_removes_missing(monkeypatch):
-    """Devices not present in gateway.devices should be removed."""
-    hass = FakeHass()
-    monkeypatch.setattr(yp, "async_register_admin_service", lambda *a, **k: None)
-
-    notifications = []
-    monkeypatch.setattr(yp.persistent_notification, "async_create",
-                        lambda *a, **k: notifications.append((a, k)))
-
-    # Gateway knows about device 100 only
-    gw = StaleGateway(device_ids=[100])
-    hass.data[DOMAIN][CONF_GATEWAYS]["entry-1"] = gw
-
-    # Device registry has device 100 (current) and device 200 (stale)
-    entries = [
-        FakeDeviceEntry("dev-100", "Light", {(DOMAIN, "entry-1-100")}),
-        FakeDeviceEntry("dev-200", "Old Sensor", {(DOMAIN, "entry-1-200")}),
-    ]
-    registry = FakeDeviceRegistry(entries)
-
-    import homeassistant.helpers.device_registry as dr
-    monkeypatch.setattr(dr, "async_get", lambda hass: registry)
-    monkeypatch.setattr(dr, "async_entries_for_config_entry",
-                        lambda reg, eid: entries)
-
-    services = yp.ComponentServices(hass)
-
-    class Call:
-        data = {"dry_run": False}
-
-    result = await services.async_remove_stale_devices(Call())
-
-    assert result['count'] == 1
-    assert result['removed'][0]['id'] == 200
-    assert registry.removed == ["dev-200"]
-
-
-@pytest.mark.asyncio
-async def test_remove_stale_devices_handles_runtime_host_based_identifiers(monkeypatch):
-    """Runtime identifiers are host-based, not entry-id-based."""
+async def test_remove_stale_devices_removes_missing_for_supported_identifier_prefixes(
+    monkeypatch, identifier_prefix, unique_id
+):
+    """Devices not present in gateway.devices should be removed for all supported registry prefixes."""
     hass = FakeHass()
     monkeypatch.setattr(yp, "async_register_admin_service", lambda *a, **k: None)
     monkeypatch.setattr(yp.persistent_notification, "async_create", lambda *a, **k: None)
 
-    gw = StaleGateway(host="1.2.3.4", entry_id="entry-1", device_ids=[100])
+    gw = StaleGateway(host="1.2.3.4", entry_id="entry-1", device_ids=[100], unique_id=unique_id)
     hass.data[DOMAIN][CONF_GATEWAYS]["entry-1"] = gw
 
     entries = [
-        FakeDeviceEntry("dev-100", "Light", {(DOMAIN, "1.2.3.4-100")}),
-        FakeDeviceEntry("dev-200", "Old Sensor", {(DOMAIN, "1.2.3.4-200")}),
-    ]
-    registry = FakeDeviceRegistry(entries)
-
-    import homeassistant.helpers.device_registry as dr
-    monkeypatch.setattr(dr, "async_get", lambda hass: registry)
-    monkeypatch.setattr(dr, "async_entries_for_config_entry", lambda reg, eid: entries)
-
-    services = yp.ComponentServices(hass)
-
-    class Call:
-        data = {"dry_run": False}
-
-    result = await services.async_remove_stale_devices(Call())
-
-    assert result["count"] == 1
-    assert result["removed"][0]["id"] == 200
-    assert registry.removed == ["dev-200"]
-
-
-@pytest.mark.asyncio
-async def test_remove_stale_devices_handles_stable_unique_id_identifiers(monkeypatch):
-    """Registry cleanup should understand the stable config-entry unique_id prefix."""
-    hass = FakeHass()
-    monkeypatch.setattr(yp, "async_register_admin_service", lambda *a, **k: None)
-    monkeypatch.setattr(yp.persistent_notification, "async_create", lambda *a, **k: None)
-
-    gw = StaleGateway(host="1.2.3.4", entry_id="entry-1", device_ids=[100], unique_id="1.2.3.3")
-    hass.data[DOMAIN][CONF_GATEWAYS]["entry-1"] = gw
-
-    entries = [
-        FakeDeviceEntry("dev-100", "Light", {(DOMAIN, "1.2.3.3-100")}),
-        FakeDeviceEntry("dev-200", "Old Sensor", {(DOMAIN, "1.2.3.3-200")}),
+        FakeDeviceEntry("dev-100", "Light", {(DOMAIN, f"{identifier_prefix}-100")}),
+        FakeDeviceEntry("dev-200", "Old Sensor", {(DOMAIN, f"{identifier_prefix}-200")}),
     ]
     registry = FakeDeviceRegistry(entries)
 
