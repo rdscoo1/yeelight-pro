@@ -1,6 +1,5 @@
 import asyncio
 import json
-import random
 
 import pytest
 
@@ -116,20 +115,6 @@ async def test_send_wait_result_resolved_by_on_message(monkeypatch):
     gtw = ProGateway("1.2.3.4")
     gtw.writer = DummyWriter()  # считаем, что уже подключены
 
-    created_ids = []
-
-    orig_randint = random.randint
-
-    def fake_randint(a, b):
-        val = orig_randint(a, b)
-        created_ids.append(val)
-        return val
-
-    monkeypatch.setattr(
-        "custom_components.yeelight_pro.core.gateway.random.randint",
-        fake_randint,
-    )
-
     # запускаем send в фоне
     send_task = asyncio.create_task(
         gtw.send("gateway_get.node", params={"id": 1}, wait_result=True)
@@ -138,8 +123,10 @@ async def test_send_wait_result_resolved_by_on_message(monkeypatch):
     # даём циклу чуть поработать, чтобы _msgs успел заполниться
     await asyncio.sleep(0)
 
-    assert len(created_ids) == 1
-    cid = created_ids[0]
+    # cid теперь берётся из монотонного счётчика; читаем его из _msgs
+    pending_ids = [k for k in gtw._msgs if isinstance(k, int)]
+    assert len(pending_ids) == 1
+    cid = pending_ids[0]
     assert cid in gtw._msgs  # future зарегистрирован
 
     # имитируем приход ответа
@@ -1047,3 +1034,38 @@ async def test_keepalive_resets_failure_count_on_success(monkeypatch):
 
     assert call_idx["n"] >= 3
     assert close_calls["count"] == 0, "reconnect should not fire on non-consecutive failures"
+
+
+@pytest.mark.asyncio
+async def test_message_ids_are_monotonic():
+    """Non-topology sends use consecutive, unique correlation ids."""
+    gtw = get_gateway()
+
+    written = []
+
+    class RecordingWriter:
+        def write(self, data):
+            written.append(data)
+
+        async def drain(self):
+            return
+
+        def is_closing(self):
+            return False
+
+        def close(self):
+            return
+
+        async def wait_closed(self):
+            return
+
+    gtw.writer = RecordingWriter()
+
+    for _ in range(3):
+        await gtw._send_internal("gateway_set.prop", wait_result=False, nodes=[])
+
+    ids = [json.loads(m.split(MSG_SPLIT)[0])["id"] for m in written]
+    assert ids == sorted(ids)
+    assert len(set(ids)) == 3
+    assert ids[1] == ids[0] + 1
+    assert ids[2] == ids[1] + 1

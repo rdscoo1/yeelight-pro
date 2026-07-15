@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import random
 import json
@@ -114,6 +115,9 @@ class ProGateway:
         self.setups: Dict[str, Callable] = {}
         self.log = options.get('logger', _LOGGER)
         self._msgs: Dict[Union[int, str], asyncio.Future] = {}
+        # Monotonic correlation ids; random start avoids colliding with a
+        # gateway that still remembers ids from a previous session.
+        self._cid_counter = itertools.count(random.randint(1_000_000_000, 1_500_000_000))
         self._reconnect_delay: float = MIN_RECONNECT_DELAY
         self._stopping: bool = False
         self._json_error_count: int = 0
@@ -662,7 +666,7 @@ class ProGateway:
             if method in ("gateway_get.topology", "device_get.topology"):
                 cid = method.replace("_get.", "_post.")
             else:
-                cid = random.randint(1_000_000_000, 2_147_483_647)
+                cid = next(self._cid_counter)
 
             if wait_result:
                 existing = self._msgs.get(cid)
