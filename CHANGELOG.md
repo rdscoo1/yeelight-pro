@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Fixed color temperature changes from the Home Assistant UI being silently dropped: `light.turn_on` delivers `color_temp_kelvin`, which was not mapped to the device's `color_temp` converter and never reached the gateway
+- Made covers report their actual position (`cp`) instead of the target position (`tp`), so a moving or stalled curtain reflects reality rather than snapping to its destination
+- Merged partial `params` updates from the gateway instead of replacing them, so previously known channel state (color temp, brightness, switch channels, cover position) is no longer wiped by partial messages
+- Derived group light capabilities from the intersection of member modes at topology-finalize time, so on/off-only groups no longer expose a dead color-temperature slider and all-color groups correctly expose RGB
+
+### Changed
+- Generalized passive state verification to cover every property in a command (`ct`, brightness, RGB, switch channels), not just power, with retry on mismatch
+- Stopped holding the global send lock during reconnect attempts, so a single slow connect no longer serializes commands from every entity
+- Replaced random message correlation IDs with a monotonic counter (masked to signed 32-bit for gateway firmware compatibility)
+- Removed the topology cache, which never served a cached response
+- Simplified `ColorTempKelvin.encode` (dropped the now-unreachable mired heuristic) and collapsed the duplicated climate state-assignment path
+
+### Testing
+- Added regression coverage for color-temperature-from-UI, cover actual position, partial `params` merging, generalized verification (including a color-temp retry), monotonic message IDs, group capability derivation (on/off, RGB, and idempotency), and connect-outside-the-lock behavior
+
+### Chore
+- Untracked the `.coverage` artifact and ignored local tooling directories
+
 ## [1.3.5] - 2026-05-01
 
 ### Fixed
