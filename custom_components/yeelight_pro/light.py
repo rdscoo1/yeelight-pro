@@ -161,6 +161,11 @@ class XLightEntity(XEntity, LightEntity):
         # Any future HA attr that collides with a converter `attr` would otherwise
         # be silently written to the device.
         payload = {k: v for k, v in kwargs.items() if k in _LIGHT_FORWARD_ATTRS}
+        # HA delivers color temperature as `color_temp_kelvin`, but the device
+        # converter is registered as `color_temp` - without this rename the
+        # value is silently dropped by XDevice.encode().
+        if ATTR_COLOR_TEMP_KELVIN in payload:
+            payload['color_temp'] = payload.pop(ATTR_COLOR_TEMP_KELVIN)
         payload[self._name] = on
         ret = await self.device_send_props(payload)
         if ret:

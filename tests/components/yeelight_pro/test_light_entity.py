@@ -283,3 +283,45 @@ async def test_prestage_color_temp_mired_with_clamp(monkeypatch):
     assert sent["color_temp"] == 6500
     assert entity.color_temp_kelvin == 6500
     assert entity._attr_color_mode == ColorMode.COLOR_TEMP
+
+
+@pytest.mark.asyncio
+async def test_turn_on_forwards_color_temp_kelvin(monkeypatch):
+    """Regression: HA UI sends `color_temp_kelvin`; it must reach the device
+    as the converter key `color_temp`, not be silently dropped."""
+    device, conv = make_light_device()
+    entity = XLightEntity(device, conv)
+
+    sent = {}
+
+    async def fake_send(payload):
+        sent.update(payload)
+        return True
+
+    monkeypatch.setattr(entity, "device_send_props", fake_send)
+
+    await entity.async_turn_on(**{ATTR_COLOR_TEMP_KELVIN: 4000})
+
+    assert sent["light"] is True
+    assert sent["color_temp"] == 4000
+    assert ATTR_COLOR_TEMP_KELVIN not in sent
+    assert entity._attr_color_mode == ColorMode.COLOR_TEMP
+
+
+@pytest.mark.asyncio
+async def test_turn_on_color_temp_reaches_gateway_as_ct(monkeypatch):
+    """Full encode chain: kelvin from HA must end up as `ct` in the `set` section."""
+    device, conv = make_light_device()
+    entity = XLightEntity(device, conv)
+
+    captured = {}
+
+    async def fake_set_prop(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(device, "set_prop", fake_set_prop)
+
+    await entity.async_turn_on(**{ATTR_COLOR_TEMP_KELVIN: 4000})
+
+    assert captured["set"]["ct"] == 4000
