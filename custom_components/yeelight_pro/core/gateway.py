@@ -175,7 +175,14 @@ class ProGateway:
             await device.setup_entities()
 
     async def _finalize_groups(self) -> None:
-        """Re-derive group capabilities now that topology members are known."""
+        """Re-derive group capabilities now that topology members are known.
+
+        This finalizes each group within the topology message it appears in,
+        assuming ``gateway_get.topology`` returns a COMPLETE snapshot (group and
+        all its members in a single message). If members ever arrived in a later
+        message, a group would finalize against the broad default and the
+        ``if dvc.entities`` guard below would then freeze that stale set.
+        """
         from .device import GroupDevice
         for dvc in list(self.devices.values()):
             if not isinstance(dvc, GroupDevice):
