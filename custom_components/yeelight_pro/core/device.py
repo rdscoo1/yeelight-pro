@@ -219,14 +219,13 @@ class XDevice:
         
         # Check if this update matches expected state from passive verification
         if self._expected_state:
-            expected_power = self._expected_state.get('power')
-            # Power state is nested inside 'params' dict from gateway messages
-            actual_power = (data.get('params') or {}).get('p')
-
-            # Only verify if power state is present in update
-            if actual_power is not None and actual_power == expected_power:
-                # State matched - cancel verification task
-                _LOGGER.debug('[%s] State verified via gateway_post.prop: p=%s', self.id, actual_power)
+            expected = self._expected_state.get('params') or {}
+            actual = data.get('params') or {}
+            # Cancel only when every expected key arrived and matches;
+            # partial echoes are resolved by the timeout path against
+            # the merged self.prop_params.
+            if expected and all(k in actual and actual[k] == v for k, v in expected.items()):
+                _LOGGER.debug('[%s] State verified via gateway_post.prop: %s', self.id, expected)
                 await self.async_cancel_verify_task()
 
     async def event_fired(self, data: dict):
@@ -399,92 +398,78 @@ class XDevice:
         except asyncio.CancelledError:
             pass
 
-    async def _verify_state_later(self, expected_power: bool, retry_cmd: str, retry_node: dict, attempt: int = 0):
-        """Passive state verification - waits for gateway_post.prop, retries if mismatch.
-        
-        This method waits for STATE_VERIFY_TIMEOUT seconds. If gateway_post.prop arrives
-        with matching state, prop_changed() cancels this task. If timeout occurs and state
-        still doesn't match, retries the command.
-        
-        Zero overhead: no additional gateway requests, uses existing gateway_post.prop messages.
+    async def _verify_state_later(self, expected: Dict, retry_cmd: str, retry_node: dict, attempt: int = 0):
+        """Passive state verification - waits for gateway_post.prop, retries on mismatch.
+
+        Compares every key of `expected` (the `set` payload) against the merged
+        device params. Keys the device never reports are unverifiable and skipped.
         """
         try:
             current_task = asyncio.current_task()
             owns_retry_chain = current_task is not None and self._verify_task is current_task
             await asyncio.sleep(STATE_VERIFY_TIMEOUT)
-            
-            # If we reach here, timeout occurred without state update
-            if not self._expected_state:
-                # State was already verified and cleared by prop_changed
-                return
-            
-            # Power state is nested inside 'params' in self.prop
-            actual_power = self.prop_params.get('p')
 
-            if actual_power is None:
-                # Device has not sent gateway_post.prop at all - state is unknown.
-                # Retrying to an unresponsive device produces log spam without benefit.
+            if not self._expected_state:
+                return
+
+            params = self.prop_params
+            reported = {k: params[k] for k in expected if k in params}
+
+            if not reported:
                 _LOGGER.debug(
-                    '[%s] State unconfirmed after %.1fs: device has not reported p '
-                    '(no gateway_post.prop received), skipping retry',
-                    self.id, STATE_VERIFY_TIMEOUT,
+                    '[%s] State unconfirmed after %.1fs: device reported none of %s, skipping retry',
+                    self.id, STATE_VERIFY_TIMEOUT, sorted(expected),
                 )
                 self._expected_state = None
                 if owns_retry_chain:
                     self._verify_task = None
                 return
 
-            if actual_power == expected_power:
-                # State matches now
-                _LOGGER.debug('[%s] State verified after timeout: p=%s', self.id, actual_power)
+            mismatched = {k: v for k, v in reported.items() if v != expected[k]}
+            if not mismatched:
+                _LOGGER.debug('[%s] State verified after timeout: %s', self.id, reported)
                 self._expected_state = None
                 if owns_retry_chain:
                     self._verify_task = None
                 return
 
-            # State mismatch - retry
             if attempt < STATE_VERIFY_RETRIES:
-                # If a newer command changed _expected_state while this task was sleeping,
-                # our expected_power is stale. The new command's verify task will handle it.
-                current_expected = self._expected_state.get('power') if self._expected_state else None
-                if current_expected != expected_power:
+                current_expected = self._expected_state.get('params') if self._expected_state else None
+                if current_expected != expected:
                     _LOGGER.debug(
-                        '[%s] Verify task for p=%s is stale (current expected p=%s), aborting',
-                        self.id, expected_power, current_expected,
+                        '[%s] Verify task for %s is stale (current expected %s), aborting',
+                        self.id, expected, current_expected,
                     )
                     return
 
                 if self.gateway:
                     self.gateway.stats.state_mismatches += 1
                 _LOGGER.warning(
-                    '[%s] State mismatch after %.1fs: expected p=%s, actual p=%s (retry %d/%d)',
-                    self.id, STATE_VERIFY_TIMEOUT, expected_power, actual_power,
-                    attempt + 1, STATE_VERIFY_RETRIES
+                    '[%s] State mismatch after %.1fs: expected %s, actual %s (retry %d/%d)',
+                    self.id, STATE_VERIFY_TIMEOUT, expected, reported,
+                    attempt + 1, STATE_VERIFY_RETRIES,
                 )
-                
-                # Retry command
+
                 if self.gateway:
                     result = await self.gateway.send(retry_cmd, nodes=[retry_node])
                     if result:
                         self.gateway.stats.state_corrections += 1
                         _LOGGER.info('[%s] State correction command sent', self.id)
 
-                    # Only continue the retry chain when this coroutine is the tracked task.
                     if owns_retry_chain:
                         self._verify_task = self._create_task(
-                            self._verify_state_later(expected_power, retry_cmd, retry_node, attempt + 1)
+                            self._verify_state_later(expected, retry_cmd, retry_node, attempt + 1)
                         )
             else:
                 _LOGGER.error(
-                    '[%s] State verification failed after %d retries: expected p=%s, actual p=%s',
-                    self.id, STATE_VERIFY_RETRIES, expected_power, actual_power
+                    '[%s] State verification failed after %d retries: expected %s, actual %s',
+                    self.id, STATE_VERIFY_RETRIES, expected, reported,
                 )
                 self._expected_state = None
                 if owns_retry_chain:
                     self._verify_task = None
-                
+
         except asyncio.CancelledError:
-            # Task was cancelled by prop_changed - state matched
             pass
 
     async def set_prop(self, **kwargs):
@@ -501,9 +486,9 @@ class XDevice:
         cmd = kwargs.pop('method', 'gateway_set.prop')
         verify = kwargs.pop('verify', True)
         
-        # Extract expected power state for verification
-        expected_power = kwargs.get('set', {}).get('p') if 'set' in kwargs else None
-        
+        # Everything we asked the device to set is verifiable state.
+        expected_params = dict(kwargs.get('set') or {})
+
         node = {
             'id': self.id,
             'nt': self.nt,
@@ -512,22 +497,17 @@ class XDevice:
         
         result = await self.gateway.send(cmd, nodes=[node])
         
-        # Schedule passive verification if enabled and power state is being set
-        if verify and result and expected_power is not None:
-            # Cancel previous verification if exists
+        # Schedule passive verification if enabled and something was set
+        if verify and result and expected_params:
             await self.async_cancel_verify_task()
-            
-            # Store expected state
             self._expected_state = {
-                'power': expected_power,
+                'params': expected_params,
                 'timestamp': time.time(),
             }
-            
-            # Schedule verification
             self._verify_task = self._create_task(
-                self._verify_state_later(expected_power, cmd, node)
+                self._verify_state_later(expected_params, cmd, node)
             )
-            _LOGGER.debug('[%s] Scheduled passive verification for p=%s', self.id, expected_power)
+            _LOGGER.debug('[%s] Scheduled passive verification for %s', self.id, expected_params)
         
         return result
 
