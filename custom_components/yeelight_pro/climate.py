@@ -65,18 +65,13 @@ class XClimateEntity(XEntity, ClimateEntity, RestoreEntity):
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
         self._attr_target_temperature_step = 1
 
-    # Mapping from decoded attribute names to local state variables
-    _CLIMATE_ATTRS = frozenset({
-        'is_on', 'mode', 'current_temperature', 'target_temperature', 'fan_mode',
-    })
-
     @callback
     def async_set_state(self, data: dict):
         super().async_set_state(data)
-        # Only update known climate attributes - never use setattr on arbitrary keys
-        for k in self._CLIMATE_ATTRS:
-            if k in data:
-                setattr(self, k, data[k])
+        if 'is_on' in data:
+            self.is_on = data['is_on']
+        if 'mode' in data:
+            self.mode = data['mode']
         if 'fan_mode' in data:
             self._attr_fan_mode = data['fan_mode']
         if 'current_temperature' in data:
@@ -84,7 +79,6 @@ class XClimateEntity(XEntity, ClimateEntity, RestoreEntity):
         if 'target_temperature' in data:
             self._attr_target_temperature = data['target_temperature']
         self._attr_hvac_mode = self.mode if self.is_on else HVACMode.OFF
-        
 
     @callback
     def async_restore_last_state(self, state: str, attrs: dict):
