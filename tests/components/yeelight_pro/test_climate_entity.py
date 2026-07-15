@@ -94,6 +94,20 @@ def test_async_set_state_updates_hvac_mode():
     assert entity.hvac_mode == HVACMode.OFF
 
 
+def test_async_set_state_updates_temperature_and_fan():
+    """async_set_state должен обновлять температуру и fan_mode, читаемые через свойства."""
+    device, conv = make_climate_device()
+    entity = XClimateEntity(device, conv)
+
+    entity.async_set_state(
+        {"current_temperature": 22, "target_temperature": 24, "fan_mode": FAN_HIGH}
+    )
+
+    assert entity.current_temperature == 22
+    assert entity.target_temperature == 24
+    assert entity.fan_mode == FAN_HIGH
+
+
 @pytest.mark.asyncio
 async def test_async_set_temperature_calls_device(monkeypatch):
     """async_set_temperature должен слать target_temperature в device_send_props."""
