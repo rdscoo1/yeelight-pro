@@ -413,6 +413,10 @@ class XDevice:
                 return
 
             params = self.prop_params
+            # Keys the device never echoes in gateway_post.prop are unverifiable
+            # and skipped: this retry is only a best-effort net. The real fix for a
+            # dropped command is the correct key mapping (Task 1's color_temp rename),
+            # not this passive resend.
             reported = {k: params[k] for k in expected if k in params}
 
             if not reported:
@@ -425,6 +429,10 @@ class XDevice:
                     self._verify_task = None
                 return
 
+            # Exact equality: correct for discrete keys (p, switch channels) but a
+            # device may echo continuous keys (ct, l, c) as snapped/rounded values,
+            # which could trigger false-mismatch retries. Flagged for real-device
+            # validation; no tolerance logic added deliberately.
             mismatched = {k: v for k, v in reported.items() if v != expected[k]}
             if not mismatched:
                 _LOGGER.debug('[%s] State verified after timeout: %s', self.id, reported)
