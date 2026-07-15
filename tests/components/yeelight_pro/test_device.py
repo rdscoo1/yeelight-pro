@@ -603,7 +603,7 @@ async def test_prop_changed_does_not_cancel_verify_task_when_state_mismatches():
 
 
 @pytest.mark.asyncio
-async def test_verify_state_later_reads_params_not_root():
+async def test_verify_state_later_reads_params_not_root(monkeypatch):
     """_verify_state_later должен читать power из prop_params (params.p), не из корня prop."""
     dev = _make_light_device()
     gw = FakeGateway()
@@ -622,6 +622,11 @@ async def test_verify_state_later_reads_params_not_root():
 
     gw.send = tracking_send  # type: ignore[method-assign]
 
+    async def fast_sleep(_):
+        return
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
     # Вызываем verify сразу (attempt=0) — state совпадает, команда НЕ должна слаться
     await dev._verify_state_later({"p": True}, "gateway_set.prop", {"id": 42, "set": {"p": True}}, attempt=0)
 
@@ -634,7 +639,7 @@ async def test_verify_state_later_reads_params_not_root():
 
 
 @pytest.mark.asyncio
-async def test_verify_state_later_skips_retry_when_actual_is_none():
+async def test_verify_state_later_skips_retry_when_actual_is_none(monkeypatch):
     """Когда actual_power is None (устройство не прислало prop), не должно быть retry-команды.
 
     Регрессионный тест для бага: устройства без gateway_post.prop (например mesh-узлы
@@ -657,6 +662,11 @@ async def test_verify_state_later_skips_retry_when_actual_is_none():
 
     gw.send = tracking_send  # type: ignore[method-assign]
 
+    async def fast_sleep(_):
+        return
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
     # Simulate timeout: prop_params.get('p') returns None (device never confirmed)
     await dev._verify_state_later({"p": False}, "gateway_set.prop", {"id": 42, "set": {"p": False}}, attempt=0)
 
@@ -666,7 +676,7 @@ async def test_verify_state_later_skips_retry_when_actual_is_none():
 
 
 @pytest.mark.asyncio
-async def test_verify_state_later_skips_retry_when_actual_is_none_on_true():
+async def test_verify_state_later_skips_retry_when_actual_is_none_on_true(monkeypatch):
     """Аналогично: actual p=None при expected p=True → тоже не ретраить."""
     dev = _make_light_device()
     gw = FakeGateway()
@@ -683,6 +693,11 @@ async def test_verify_state_later_skips_retry_when_actual_is_none_on_true():
 
     gw.send = tracking_send  # type: ignore[method-assign]
 
+    async def fast_sleep(_):
+        return
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
     await dev._verify_state_later({"p": True}, "gateway_set.prop", {"id": 42, "set": {"p": True}}, attempt=0)
 
     assert sent_commands == []
@@ -692,7 +707,7 @@ async def test_verify_state_later_skips_retry_when_actual_is_none_on_true():
 
 
 @pytest.mark.asyncio
-async def test_verify_state_later_skips_warning_when_expected_state_changed():
+async def test_verify_state_later_skips_warning_when_expected_state_changed(monkeypatch):
     """Если после расписания верификации пришла новая команда и _expected_state изменился,
     старая verify-задача не должна логировать WARNING и слать retry."""
     dev = _make_light_device()
@@ -713,6 +728,11 @@ async def test_verify_state_later_skips_warning_when_expected_state_changed():
 
     gw.send = tracking_send  # type: ignore[method-assign]
 
+    async def fast_sleep(_):
+        return
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
     # Old task: was verifying p=False, but _expected_state now says True
     await dev._verify_state_later({"p": False}, "gateway_set.prop", {"id": 42, "set": {"p": False}}, attempt=0)
 
@@ -725,7 +745,7 @@ async def test_verify_state_later_skips_warning_when_expected_state_changed():
 
 
 @pytest.mark.asyncio
-async def test_verify_state_later_retries_on_mismatch():
+async def test_verify_state_later_retries_on_mismatch(monkeypatch):
     """When actual power mismatches expected, _verify_state_later should send a retry command
     and increment gateway stats counters."""
     from custom_components.yeelight_pro.core.gateway import GatewayStatistics
@@ -740,6 +760,11 @@ async def test_verify_state_later_retries_on_mismatch():
     dev._expected_state = {"params": {"p": True}, "timestamp": 0}
 
     retry_node = {"id": 42, "set": {"p": True}}
+    async def fast_sleep(_):
+        return
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
     await dev._verify_state_later({"p": True}, "gateway_set.prop", retry_node, attempt=0)
 
     # Should have sent a retry command
@@ -775,10 +800,16 @@ async def test_verify_state_later_retries_on_ct_mismatch(monkeypatch):
     await dev._verify_state_later({"p": True, "ct": 4000}, "gateway_set.prop", node, attempt=0)
 
     assert len(gw.sent) == 1, "retry command must be sent on ct mismatch"
+    method, _params, _wait, kwargs = gw.sent[0]
+    assert method == "gateway_set.prop"
+    retried_node = kwargs.get("nodes")[0]
+    assert retried_node["set"] == {"p": True, "ct": 4000}, (
+        "retried node must carry the full set payload, not just power"
+    )
 
 
 @pytest.mark.asyncio
-async def test_verify_state_later_exhausts_retries():
+async def test_verify_state_later_exhausts_retries(monkeypatch):
     """After STATE_VERIFY_RETRIES attempts, should log error and clear _expected_state."""
     from custom_components.yeelight_pro.core.device import STATE_VERIFY_RETRIES
 
@@ -791,6 +822,11 @@ async def test_verify_state_later_exhausts_retries():
 
     retry_node = {"id": 42, "set": {"p": True}}
     # Call with attempt == STATE_VERIFY_RETRIES (exhausted)
+    async def fast_sleep(_):
+        return
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
     await dev._verify_state_later({"p": True}, "gateway_set.prop", retry_node, attempt=STATE_VERIFY_RETRIES)
 
     # No retry command should be sent — retries exhausted
