@@ -155,25 +155,29 @@ def test_brightnessconv_encode_decode_clamps_and_scales():
     assert payload["l"] == 0
 
 
-def test_colortempkelvin_decode_and_encode_mired_and_kelvin():
+def test_colortempkelvin_decode_and_encode_kelvin():
     dev = DummyDevice()
     conv = ColorTempKelvin("color_temp", prop="ct", mink=2700, maxk=6500)
 
+    # decode: device kelvin -> HA (mired in attr + kelvin key)
     payload = {}
     conv.decode(dev, payload, 4000)
     assert payload["color_temp"] == int(1_000_000 / 4000)
     assert payload["color_temp_kelvin"] == 4000
 
-    # encode mired (например 250 -> 4000K)
+    # encode: kelvin passes through
     payload = {}
-    conv.encode(dev, payload, 250)
-    k = payload["ct"]
-    assert 2700 <= k <= 6500
+    conv.encode(dev, payload, 4000)
+    assert payload["ct"] == 4000
 
-    # encode Kelvin за пределами -> кламп
+    # encode: kelvin is clamped to [mink, maxk]
     payload = {}
-    conv.encode(dev, payload, 8000)
+    conv.encode(dev, payload, 20000)
     assert payload["ct"] == 6500
+
+    payload = {}
+    conv.encode(dev, payload, 100)
+    assert payload["ct"] == 2700
 
 
 def test_colorrgbconv_encode_decode_and_clamp():

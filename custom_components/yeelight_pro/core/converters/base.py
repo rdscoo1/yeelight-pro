@@ -122,18 +122,14 @@ class ColorTempKelvin(PropConv):
         payload["color_temp_kelvin"] = k
 
     def encode(self, device, payload, value: int):
-        """Accept mired or kelvin and send Kelvin to device."""
+        """Encode a Kelvin value, clamped to the device range."""
         try:
-            v = int(value)
+            k = int(value)
         except (TypeError, ValueError) as exc:
             _LOGGER.warning('ColorTempKelvin.encode: invalid value %r: %s', value, exc)
             return
-        if v <= 1000:  # likely mired from HA
-            k = int(1_000_000 / max(1, v))
-        else:          # likely Kelvin (e.g., your prestage service)
-            k = v
         k = max(self.mink, min(self.maxk, k))
-        super().encode(device, payload, k)  # send Kelvin
+        super().encode(device, payload, k)
 
 
 class ColorRgbConv(PropConv):
