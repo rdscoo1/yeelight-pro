@@ -203,7 +203,15 @@ class XDevice:
             if k not in self.prop:
                 has_new = True
                 break
-        self.prop.update(data)
+        incoming_params = data.get('params')
+        existing_params = self.prop.get('params')
+        if isinstance(incoming_params, dict) and isinstance(existing_params, dict):
+            # Gateways send partial params - merge so previously known
+            # channel state (ct, brightness, switch channels, cover cp...) survives.
+            existing_params.update(incoming_params)
+            self.prop.update({k: v for k, v in data.items() if k != 'params'})
+        else:
+            self.prop.update(data)
         if has_new:
             self.setup_converters()
             await self.setup_entities()

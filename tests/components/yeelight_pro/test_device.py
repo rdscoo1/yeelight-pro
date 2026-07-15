@@ -890,3 +890,16 @@ async def test_set_prop_no_verification_when_send_fails():
 
     assert dev._verify_task is None
     assert dev._expected_state is None
+
+
+# ---------- Partial params merge ----------
+
+
+@pytest.mark.asyncio
+async def test_prop_changed_merges_partial_params():
+    """A partial params update must not wipe previously known params keys."""
+    dev = XDevice({"id": 42, "nt": 2, "type": 0})
+    await dev.prop_changed({"params": {"p": True, "ct": 4000, "l": 80}})
+    await dev.prop_changed({"params": {"p": False}})
+
+    assert dev.prop_params == {"p": False, "ct": 4000, "l": 80}
