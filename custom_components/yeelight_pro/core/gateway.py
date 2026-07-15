@@ -33,8 +33,6 @@ KEEPALIVE_FAILURE_THRESHOLD = 2  # Reconnect after N consecutive failed keepaliv
 DEFAULT_RETRIES = 3
 RETRY_DELAY_BASE = 0.5  # Base delay between retries (exponential backoff)
 
-# Topology cache settings
-TOPOLOGY_CACHE_TTL = 300  # 5 minutes
 READ_CHUNK_SIZE = 4096
 READ_BUFFER_LIMIT = 1024 * 1024
 
@@ -130,11 +128,6 @@ class ProGateway:
         # Statistics for diagnostics
         self.stats = GatewayStatistics()
 
-        # Topology cache
-        self._topology_cache: Optional[Dict] = None
-        self._topology_cache_time: float = 0
-        self._topology_cache_ttl: float = options.get('topology_cache_ttl', TOPOLOGY_CACHE_TTL)
-        
         # Configurable transition time (default 5 seconds)
         self.transition_time: float = options.get('transition_time', 5.0)
         
@@ -423,7 +416,6 @@ class ProGateway:
         """
         self.log.info('[%s] Reconciling device states after reconnect', self.host)
         try:
-            self.invalidate_topology_cache()
             await self.topology(wait_result=True)
             self.log.info('[%s] State reconciliation complete, %d devices', self.host, len(self.devices))
         except Exception as exc:
@@ -732,29 +724,10 @@ class ProGateway:
 
         return result
 
-    async def topology(self, wait_result: bool = False, use_cache: bool = True) -> Optional[Dict]:
-        """Request topology from gateway with optional caching."""
-        # Check cache first
-        if use_cache and self._topology_cache:
-            cache_age = time.time() - self._topology_cache_time
-            if cache_age < self._topology_cache_ttl:
-                self.log.debug('[%s] Using cached topology (age: %.1fs)', self.host, cache_age)
-                return self._topology_cache
-        
+    async def topology(self, wait_result: bool = False) -> Optional[Dict]:
+        """Request topology from gateway."""
         cmd = 'device_get.topology' if self.pid == PID_WIFI_PANEL else 'gateway_get.topology'
-        result = await self._send_internal(cmd, wait_result=wait_result)
-        
-        # Update cache on success
-        if result:
-            self._topology_cache = result
-            self._topology_cache_time = time.time()
-        
-        return result
-    
-    def invalidate_topology_cache(self) -> None:
-        """Invalidate the topology cache."""
-        self._topology_cache = None
-        self._topology_cache_time = 0
+        return await self._send_internal(cmd, wait_result=wait_result)
 
     async def get_node(self, nid: int = 0, wait_result: bool = True) -> Optional[Dict]:
         """Get node information."""
@@ -816,7 +789,6 @@ class ProGateway:
             'device_count': self.device_count,
             'pid': self.pid,
             'transition_time': self.transition_time,
-            'topology_cache_age': time.time() - self._topology_cache_time if self._topology_cache else None,
             **self.stats.to_dict(),
         }
 

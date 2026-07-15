@@ -170,7 +170,6 @@ class XDiagnosticsSensor(XEntity, SensorEntity):
             'keepalive_failed': diag.get('keepalive_failed', 0),
             'last_error': diag.get('last_error'),
             'transition_time': diag.get('transition_time', 5.0),
-            'topology_cache_age': diag.get('topology_cache_age'),
         }
     
     @staticmethod

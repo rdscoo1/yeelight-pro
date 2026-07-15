@@ -295,7 +295,6 @@ def _make_diagnostics_entity():
             'keepalive_failed': 0,
             'last_error': None,
             'transition_time': 5.0,
-            'topology_cache_age': 42.0,
         }
 
     class FakeGatewayDev(GatewayDevice):
