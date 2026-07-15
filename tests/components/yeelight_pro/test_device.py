@@ -551,7 +551,7 @@ async def test_prop_changed_cancels_verify_task_when_state_matches():
     # Дать задаче один тик, чтобы она стартовала и встала на await asyncio.sleep(10)
     await asyncio.sleep(0)
 
-    dev._expected_state = {"power": True, "timestamp": 0}
+    dev._expected_state = {"params": {"p": True}, "timestamp": 0}
 
     # gateway_post.prop приходит с вложенным params (реальный формат сообщения)
     node = {"id": 42, "nt": 2, "pid": 1, "params": {"p": True, "l": 80}}
@@ -585,7 +585,7 @@ async def test_prop_changed_does_not_cancel_verify_task_when_state_mismatches():
     # Дать задаче стартовать
     await asyncio.sleep(0)
 
-    dev._expected_state = {"power": True, "timestamp": 0}
+    dev._expected_state = {"params": {"p": True}, "timestamp": 0}
 
     # Приходит p=False — не совпадает с ожидаемым True
     node = {"id": 42, "nt": 2, "params": {"p": False}}
@@ -611,7 +611,7 @@ async def test_verify_state_later_reads_params_not_root():
 
     # prop содержит p ТОЛЬКО внутри params (как в реальности после self.prop.update(node))
     dev.prop = {"id": 42, "nt": 2, "params": {"p": True, "l": 80}}
-    dev._expected_state = {"power": True, "timestamp": 0}
+    dev._expected_state = {"params": {"p": True}, "timestamp": 0}
 
     corrected = []
     original_send = gw.send
@@ -623,7 +623,7 @@ async def test_verify_state_later_reads_params_not_root():
     gw.send = tracking_send  # type: ignore[method-assign]
 
     # Вызываем verify сразу (attempt=0) — state совпадает, команда НЕ должна слаться
-    await dev._verify_state_later(True, "gateway_set.prop", {"id": 42, "set": {"p": True}}, attempt=0)
+    await dev._verify_state_later({"p": True}, "gateway_set.prop", {"id": 42, "set": {"p": True}}, attempt=0)
 
     assert corrected == [], (
         f"Команда коррекции НЕ должна была быть отправлена, так как state совпадает. Sent: {corrected}"
@@ -647,7 +647,7 @@ async def test_verify_state_later_skips_retry_when_actual_is_none():
 
     # prop не содержит 'p' — устройство никогда не присылало gateway_post.prop
     dev.prop = {"id": 42, "nt": 2}  # no 'params' key at all
-    dev._expected_state = {"power": False, "timestamp": 0}
+    dev._expected_state = {"params": {"p": False}, "timestamp": 0}
 
     sent_commands = []
 
@@ -658,7 +658,7 @@ async def test_verify_state_later_skips_retry_when_actual_is_none():
     gw.send = tracking_send  # type: ignore[method-assign]
 
     # Simulate timeout: prop_params.get('p') returns None (device never confirmed)
-    await dev._verify_state_later(False, "gateway_set.prop", {"id": 42, "set": {"p": False}}, attempt=0)
+    await dev._verify_state_later({"p": False}, "gateway_set.prop", {"id": 42, "set": {"p": False}}, attempt=0)
 
     assert sent_commands == [], (
         "Не должно быть retry-команды, когда устройство не прислало подтверждения (actual=None)"
@@ -673,7 +673,7 @@ async def test_verify_state_later_skips_retry_when_actual_is_none_on_true():
     dev.gateways.append(gw)  # type: ignore[arg-type]
 
     dev.prop = {}  # no params at all
-    dev._expected_state = {"power": True, "timestamp": 0}
+    dev._expected_state = {"params": {"p": True}, "timestamp": 0}
 
     sent_commands = []
 
@@ -683,7 +683,7 @@ async def test_verify_state_later_skips_retry_when_actual_is_none_on_true():
 
     gw.send = tracking_send  # type: ignore[method-assign]
 
-    await dev._verify_state_later(True, "gateway_set.prop", {"id": 42, "set": {"p": True}}, attempt=0)
+    await dev._verify_state_later({"p": True}, "gateway_set.prop", {"id": 42, "set": {"p": True}}, attempt=0)
 
     assert sent_commands == []
 
@@ -703,7 +703,7 @@ async def test_verify_state_later_skips_warning_when_expected_state_changed():
     dev.prop = {"id": 42, "nt": 2, "params": {"p": True}}
 
     # OLD verify was expecting p=False, but NEW command changed expected to p=True
-    dev._expected_state = {"power": True, "timestamp": 0}  # newer command's expectation
+    dev._expected_state = {"params": {"p": True}, "timestamp": 0}  # newer command's expectation
 
     sent_commands = []
 
@@ -714,7 +714,7 @@ async def test_verify_state_later_skips_warning_when_expected_state_changed():
     gw.send = tracking_send  # type: ignore[method-assign]
 
     # Old task: was verifying p=False, but _expected_state now says True
-    await dev._verify_state_later(False, "gateway_set.prop", {"id": 42, "set": {"p": False}}, attempt=0)
+    await dev._verify_state_later({"p": False}, "gateway_set.prop", {"id": 42, "set": {"p": False}}, attempt=0)
 
     assert sent_commands == [], (
         "Стale verify-задача не должна слать retry когда expected_state изменился"
@@ -737,10 +737,10 @@ async def test_verify_state_later_retries_on_mismatch():
 
     # Device reported p=False, but we expected p=True → mismatch
     dev.prop = {"id": 42, "nt": 2, "params": {"p": False}}
-    dev._expected_state = {"power": True, "timestamp": 0}
+    dev._expected_state = {"params": {"p": True}, "timestamp": 0}
 
     retry_node = {"id": 42, "set": {"p": True}}
-    await dev._verify_state_later(True, "gateway_set.prop", retry_node, attempt=0)
+    await dev._verify_state_later({"p": True}, "gateway_set.prop", retry_node, attempt=0)
 
     # Should have sent a retry command
     assert len(gw.sent) == 1
@@ -754,6 +754,30 @@ async def test_verify_state_later_retries_on_mismatch():
 
 
 @pytest.mark.asyncio
+async def test_verify_state_later_retries_on_ct_mismatch(monkeypatch):
+    """A color-temp command whose echo disagrees must be retried, like power."""
+    from custom_components.yeelight_pro.core.gateway import GatewayStatistics
+
+    dev = _make_light_device()
+    gw = FakeGateway()
+    gw.stats = GatewayStatistics()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    dev.prop["params"] = {"p": True, "ct": 3000}   # device currently at ct=3000
+    dev._expected_state = {"params": {"p": True, "ct": 4000}, "timestamp": 0}
+
+    async def fast_sleep(_):
+        return
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    node = {"id": 42, "nt": 2, "set": {"p": True, "ct": 4000}}
+    await dev._verify_state_later({"p": True, "ct": 4000}, "gateway_set.prop", node, attempt=0)
+
+    assert len(gw.sent) == 1, "retry command must be sent on ct mismatch"
+
+
+@pytest.mark.asyncio
 async def test_verify_state_later_exhausts_retries():
     """After STATE_VERIFY_RETRIES attempts, should log error and clear _expected_state."""
     from custom_components.yeelight_pro.core.device import STATE_VERIFY_RETRIES
@@ -763,11 +787,11 @@ async def test_verify_state_later_exhausts_retries():
     dev.gateways.append(gw)  # type: ignore[arg-type]
 
     dev.prop = {"params": {"p": False}}
-    dev._expected_state = {"power": True, "timestamp": 0}
+    dev._expected_state = {"params": {"p": True}, "timestamp": 0}
 
     retry_node = {"id": 42, "set": {"p": True}}
     # Call with attempt == STATE_VERIFY_RETRIES (exhausted)
-    await dev._verify_state_later(True, "gateway_set.prop", retry_node, attempt=STATE_VERIFY_RETRIES)
+    await dev._verify_state_later({"p": True}, "gateway_set.prop", retry_node, attempt=STATE_VERIFY_RETRIES)
 
     # No retry command should be sent — retries exhausted
     assert gw.sent == []
@@ -791,7 +815,7 @@ async def test_set_prop_schedules_verification_for_power_command():
     assert dev._verify_task is not None
     assert not dev._verify_task.done()
     assert dev._expected_state is not None
-    assert dev._expected_state['power'] is True
+    assert dev._expected_state['params']['p'] is True
 
     # Cleanup
     dev._verify_task.cancel()
@@ -799,13 +823,36 @@ async def test_set_prop_schedules_verification_for_power_command():
 
 
 @pytest.mark.asyncio
-async def test_set_prop_does_not_schedule_verification_without_power():
-    """set_prop should NOT schedule verification when no power state is set."""
+async def test_set_prop_schedules_verification_for_non_power_command():
+    """Verification now covers every set property, not just power.
+
+    A brightness-only command must still schedule verification so a dropped
+    ``l`` command is detected and retried like a dropped ``p`` command was.
+    """
     dev = _make_light_device()
     gw = FakeGateway()
     dev.gateways.append(gw)  # type: ignore[arg-type]
 
     await dev.set_prop(set={"l": 50})
+
+    assert dev._verify_task is not None
+    assert not dev._verify_task.done()
+    assert dev._expected_state is not None
+    assert dev._expected_state["params"] == {"l": 50}
+
+    # Cleanup
+    dev._verify_task.cancel()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_set_prop_does_not_schedule_verification_for_empty_set():
+    """An empty set payload has nothing to verify, so no task is scheduled."""
+    dev = _make_light_device()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    await dev.set_prop(set={})
 
     assert dev._verify_task is None
     assert dev._expected_state is None
@@ -834,7 +881,7 @@ async def test_set_prop_cancels_previous_verification():
     assert first_task.cancelled()
 
     # Expected state should reflect the latest command
-    assert dev._expected_state['power'] is False
+    assert dev._expected_state['params']['p'] is False
 
     # Cleanup
     second_task.cancel()
