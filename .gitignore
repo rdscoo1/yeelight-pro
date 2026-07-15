@@ -8,3 +8,9 @@ __pycache__/
 .ruff_cache
 .venv
 .vscode
+
+# Test / tooling artifacts
+.coverage
+.pytest_cache/
+.serena/
+*.log
