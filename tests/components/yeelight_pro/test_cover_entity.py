@@ -147,3 +147,22 @@ async def test_cover_async_open_close_stop_and_set_position(monkeypatch):
     # set explicit position
     await entity.async_set_cover_position(**{ATTR_POSITION: 55})
     assert sent[-1] == {ATTR_POSITION: 55}
+
+
+def test_cover_prefers_actual_position_over_target():
+    """`current_position` (wire cp) must win over `position` (wire tp)."""
+    entity = make_cover_entity()
+
+    # Gateway reports: target 100 (opening), actually still at 5
+    entity.async_set_state({"position": 100, "current_position": 5})
+    assert entity.current_cover_position == 5
+    assert entity.is_closed is False
+
+    # Actual position alone updates too
+    entity.async_set_state({"current_position": 2})
+    assert entity.current_cover_position == 2
+    assert entity.is_closed is True
+
+    # Target-only updates (e.g. state restore) still work as fallback
+    entity.async_set_state({"position": 50})
+    assert entity.current_cover_position == 50

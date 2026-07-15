@@ -42,9 +42,13 @@ class XCoverEntity(XEntity, CoverEntity, RestoreEntity):
             self._attr_is_closing = run_state == "closing"
             self._attr_state = run_state
 
-        # Handle cover position
-        if ATTR_POSITION in data:
+        # Position: prefer the actual position (wire `cp`) over the target
+        # (wire `tp`). Target-only updates (state restore) remain a fallback.
+        if 'current_position' in data:
+            self._attr_current_cover_position = data['current_position']
+        elif ATTR_POSITION in data:
             self._attr_current_cover_position = data[ATTR_POSITION]
+        if self._attr_current_cover_position is not None:
             self._attr_is_closed = self._attr_current_cover_position <= 3
 
     @callback
