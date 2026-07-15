@@ -787,9 +787,12 @@ class GroupDevice(LightDevice):
         self.name = node.get('n') or f'Group {self.id}'
 
     def setup_converters(self):
-        # Capabilities depend on members, which are only resolvable after the
-        # topology pass - rebuild from scratch so broad-default converters
-        # from __init__ don't linger once real member modes are known.
+        # Capabilities depend on members, resolved during the topology pass and
+        # frozen once entities exist (HA can't change supported modes at runtime).
+        # _finalize_groups is the single source of truth; skip rebuilds afterward
+        # so a later prop_changed can't shrink a live group's converter set.
+        if self.entities:
+            return
         self.converters.clear()
         super().setup_converters()
 

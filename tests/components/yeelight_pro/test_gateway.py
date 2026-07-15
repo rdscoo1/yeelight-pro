@@ -1078,6 +1078,60 @@ async def test_group_falls_back_to_defaults_when_member_unknown():
 
 
 @pytest.mark.asyncio
+async def test_group_all_rgb_exposes_rgb():
+    """An all-RGB group must expose RGB (the other half of the bug)."""
+    gtw = get_gateway()
+    topo = {
+        "method": "gateway_post.topology",
+        "nodes": [
+            {"id": 100, "nt": 4, "n": "Group", "type": 0, "cids": [1, 2]},
+            {"id": 1, "nt": 2, "n": "L1", "type": 4},  # LIGHT_WITH_COLOR = 4: RGB + CT + brightness
+            {"id": 2, "nt": 2, "n": "L2", "type": 4},
+        ],
+    }
+    await gtw.on_message(json.dumps(topo).encode("utf-8"))
+
+    group = gtw.devices[100]
+    assert "rgb_color" in group.converters
+    assert "color_temp" in group.converters
+    assert "brightness" in group.converters
+
+
+@pytest.mark.asyncio
+async def test_group_finalize_is_idempotent_and_freezes_once_entities_exist():
+    """A second topology pass must not recreate the group nor shrink its converters."""
+    gtw = get_gateway()
+    topo = {
+        "method": "gateway_post.topology",
+        "nodes": [
+            {"id": 100, "nt": 4, "n": "Group", "type": 0, "cids": [1, 2]},
+            {"id": 1, "nt": 2, "n": "L1", "type": 4},
+            {"id": 2, "nt": 2, "n": "L2", "type": 4},
+        ],
+    }
+    await gtw.on_message(json.dumps(topo).encode("utf-8"))
+    group = gtw.devices[100]
+    first_keys = set(group.converters)
+
+    # GatewayForTests never creates real entities, so simulate one to prove the
+    # freeze guard: once entities exist, neither a second topology pass nor a
+    # direct setup_converters() call may rebuild/shrink the live converter set.
+    sentinel = object()
+    group.entities["light"] = sentinel
+
+    await gtw.on_message(json.dumps(topo).encode("utf-8"))
+
+    assert gtw.devices[100] is group  # same instance, not recreated
+    assert set(group.converters) == first_keys  # converters unchanged
+    assert group.entities["light"] is sentinel  # existing entity preserved
+
+    # Direct guard check (Fix 1): setup_converters is a no-op when entities exist.
+    before = dict(group.converters)
+    group.setup_converters()
+    assert group.converters == before
+
+
+@pytest.mark.asyncio
 async def test_message_ids_are_monotonic():
     """Non-topology sends use consecutive, unique correlation ids."""
     gtw = get_gateway()
