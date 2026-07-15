@@ -179,6 +179,19 @@ def test_colortempkelvin_decode_and_encode_kelvin():
     conv.encode(dev, payload, 100)
     assert payload["ct"] == 2700
 
+    # encode: invalid value leaves payload untouched
+    payload = {}
+    conv.encode(dev, payload, "not-a-number")
+    assert "ct" not in payload
+
+    # encode: exact clamp boundaries pass through
+    payload = {}
+    conv.encode(dev, payload, 2700)
+    assert payload["ct"] == 2700
+    payload = {}
+    conv.encode(dev, payload, 6500)
+    assert payload["ct"] == 6500
+
 
 def test_colorrgbconv_encode_decode_and_clamp():
     dev = DummyDevice()
