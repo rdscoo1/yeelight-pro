@@ -666,7 +666,9 @@ class ProGateway:
             if method in ("gateway_get.topology", "device_get.topology"):
                 cid = method.replace("_get.", "_post.")
             else:
-                cid = next(self._cid_counter)
+                # Mask to signed 32-bit range: the gateway firmware parses `id`
+                # as an int32, so keep ids within the bound the original code used.
+                cid = next(self._cid_counter) & 0x7FFF_FFFF
 
             if wait_result:
                 existing = self._msgs.get(cid)
