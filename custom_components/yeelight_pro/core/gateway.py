@@ -645,11 +645,19 @@ class ProGateway:
                     f"pass via the appropriate parameter instead"
                 )
 
+        # Connect outside the send lock: connect() can block up to `timeout`
+        # seconds and must not serialize unrelated senders behind it.
+        # connect() is internally guarded by _connect_lock.
+        if not self.writer:
+            if not await self.connect():
+                self.log.warning('[%s] Cannot send %s: not connected', self.host, method)
+                return None
+
         async with self._send_lock:
             if not self.writer:
-                if not await self.connect():
-                    self.log.warning('[%s] Cannot send %s: not connected', self.host, method)
-                    return None
+                # Connection died between the check above and acquiring the lock.
+                self.log.warning('[%s] Cannot send %s: connection lost', self.host, method)
+                return None
 
             if method in ("gateway_get.topology", "device_get.topology"):
                 cid = method.replace("_get.", "_post.")

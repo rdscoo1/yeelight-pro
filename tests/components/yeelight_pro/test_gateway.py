@@ -456,6 +456,30 @@ async def test_send_internal_returns_none_when_not_connected(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_internal_connects_before_lock(monkeypatch):
+    """When disconnected, _send_internal attempts connect (now outside the lock)
+    and returns None if it fails - without holding _send_lock during connect."""
+    gtw = get_gateway()
+    gtw.writer = None
+
+    connect_called = []
+
+    async def fake_connect(self):
+        connect_called.append(True)
+        # Assert the send lock is NOT held while connecting. Under the old code
+        # (connect ran inside `async with self._send_lock`), this would be True.
+        assert not self._send_lock.locked(), "connect must run outside _send_lock"
+        return False
+
+    monkeypatch.setattr(type(gtw), "connect", fake_connect, raising=True)
+
+    result = await gtw._send_internal("gateway_set.prop", wait_result=True, nodes=[])
+
+    assert result is None
+    assert connect_called, "connect should have been attempted"
+
+
+@pytest.mark.asyncio
 async def test_send_retries_on_failure(monkeypatch):
     """send() должен повторять попытки и возвращать None при исчерпании."""
     gtw = ProGateway("1.2.3.4", retries=2)
