@@ -152,8 +152,13 @@ class ProGateway:
             self.log.warning('[%s] Setup handler not ready: domain=%s, device=%s', 
                            self.host, domain, device.id)
 
-    async def add_device(self, device: XDevice) -> None:
-        """Add a device to this gateway."""
+    async def add_device(self, device: XDevice, setup: bool = True) -> None:
+        """Add a device to this gateway.
+
+        When ``setup`` is False the device is registered but its entities are not
+        created yet - used for groups, whose capabilities can only be derived
+        after the full topology pass (see _finalize_groups).
+        """
         if not device.hass:
             device.hass = self.hass
         if device.id not in self.devices:
@@ -166,7 +171,21 @@ class ProGateway:
         # Don't setup device from second gateway
         if len(device.gateways) > 1:
             return
-        await device.setup_entities()
+        if setup:
+            await device.setup_entities()
+
+    async def _finalize_groups(self) -> None:
+        """Re-derive group capabilities now that topology members are known."""
+        from .device import GroupDevice
+        for dvc in list(self.devices.values()):
+            if not isinstance(dvc, GroupDevice):
+                continue
+            if dvc.entities:
+                # Entities already created on a previous topology pass - HA can't
+                # change an entity's supported modes at runtime; keep them.
+                continue
+            dvc.setup_converters()
+            await dvc.setup_entities()
 
     async def start(self) -> None:
         """Start the gateway connection."""
@@ -609,6 +628,9 @@ class ProGateway:
                 await dvc.prop_changed(node)
             elif cmd in ("gateway_post.event", "device_post.event"):
                 await dvc.event_fired(node)
+
+        if is_topology:
+            await self._finalize_groups()
 
     async def send(self, method: str, wait_result: bool = True, **kwargs: Any) -> Optional[Dict]:
         """Send a command to the gateway with retry."""

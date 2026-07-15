@@ -185,7 +185,9 @@ class XDevice:
                 return None
             if gateway.pid == 2:
                 await gateway.get_node(dvc.id, wait_result=False)
-            await gateway.add_device(dvc)
+            # Groups defer entity setup until the topology pass finishes so their
+            # capabilities can be derived from real members (see _finalize_groups).
+            await gateway.add_device(dvc, setup=not isinstance(dvc, GroupDevice))
         return dvc
 
     @staticmethod
@@ -783,6 +785,13 @@ class GroupDevice(LightDevice):
         super().__init__(node)
         self.member_ids = node.get('cids') or []
         self.name = node.get('n') or f'Group {self.id}'
+
+    def setup_converters(self):
+        # Capabilities depend on members, which are only resolvable after the
+        # topology pass - rebuild from scratch so broad-default converters
+        # from __init__ don't linger once real member modes are known.
+        self.converters.clear()
+        super().setup_converters()
 
     @property
     def color_modes(self):

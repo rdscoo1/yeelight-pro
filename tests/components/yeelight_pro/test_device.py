@@ -48,7 +48,7 @@ class FakeGateway:
         self.get_node_calls.append((node_id, wait_result))
         return {"id": node_id}
 
-    async def add_device(self, dvc):
+    async def add_device(self, dvc, setup: bool = True):
         self.devices[dvc.id] = dvc
         self.add_device_calls.append(dvc)
 
