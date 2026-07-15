@@ -21,7 +21,7 @@ class Hass:
 
 
 class GatewayForTests(ProGateway):
-    async def add_device(self, device):
+    async def add_device(self, device, setup: bool = True):
         """Подключаем девайс к шлюзу, но НЕ вызываем setup_entities()."""
         if not device.hass:
             device.hass = self.hass
@@ -1034,6 +1034,47 @@ async def test_keepalive_resets_failure_count_on_success(monkeypatch):
 
     assert call_idx["n"] >= 3
     assert close_calls["count"] == 0, "reconnect should not fire on non-consecutive failures"
+
+
+# ---------- Group capabilities derived from members ----------
+
+
+@pytest.mark.asyncio
+async def test_group_capabilities_derived_from_members():
+    """A group of on/off-only lights must not grow brightness/CT converters."""
+    gtw = get_gateway()
+    topo = {
+        "method": "gateway_post.topology",
+        "nodes": [
+            {"id": 100, "nt": 4, "n": "Group", "type": 0, "cids": [1, 2]},
+            {"id": 1, "nt": 2, "n": "L1", "type": 1},  # DeviceType.LIGHT = 1: on/off only
+            {"id": 2, "nt": 2, "n": "L2", "type": 1},
+        ],
+    }
+    await gtw.on_message(json.dumps(topo).encode("utf-8"))
+
+    group = gtw.devices[100]
+    assert "light" in group.converters
+    assert "color_temp" not in group.converters
+    assert "brightness" not in group.converters
+
+
+@pytest.mark.asyncio
+async def test_group_falls_back_to_defaults_when_member_unknown():
+    gtw = get_gateway()
+    topo = {
+        "method": "gateway_post.topology",
+        "nodes": [
+            {"id": 100, "nt": 4, "n": "Group", "type": 0, "cids": [1, 999]},
+            {"id": 1, "nt": 2, "n": "L1", "type": 1},
+            # member 999 never appears
+        ],
+    }
+    await gtw.on_message(json.dumps(topo).encode("utf-8"))
+
+    group = gtw.devices[100]
+    # Unknown member -> broad default (historical behavior), CT stays available
+    assert "color_temp" in group.converters
 
 
 @pytest.mark.asyncio
