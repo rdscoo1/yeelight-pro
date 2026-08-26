@@ -1,4 +1,6 @@
 import asyncio
+import time
+
 import pytest
 
 from homeassistant.components.light import ColorMode
@@ -6,6 +8,7 @@ from homeassistant.components.climate import FAN_LOW, FAN_MEDIUM, FAN_HIGH
 from homeassistant.components.climate.const import HVACMode
 
 from custom_components.yeelight_pro.core.device import (
+    STATE_VERIFY_RETRIES,
     XDevice,
     LightDevice,
     MotionDevice,
@@ -61,14 +64,22 @@ class FakeGateway:
 
 
 class FakeHass:
-    """Простейший hass с async_create_task."""
+    """Простейший hass с async_create_task.
+
+    Использует eager_start=True, как настоящий HomeAssistant.async_create_task
+    (по умолчанию с 2024.5). Это важно: при eager-старте корутина выполняется
+    синхронно до первого await ещё ДО того, как вызывающий код присвоит
+    результат в self._verify_task, поэтому задача не может опознать себя
+    через asyncio.current_task(). Ленивый loop.create_task такой класс багов
+    маскирует.
+    """
 
     def __init__(self, loop=None):
         self.loop = loop or asyncio.get_event_loop()
         self.created_tasks = []
 
     def async_create_task(self, coro):
-        task = self.loop.create_task(coro)
+        task = asyncio.Task(coro, loop=self.loop, eager_start=True)
         self.created_tasks.append(task)
         return task
 
@@ -758,6 +769,9 @@ async def test_verify_state_later_retries_on_mismatch(monkeypatch):
     # Device reported p=False, but we expected p=True → mismatch
     dev.prop = {"id": 42, "nt": 2, "params": {"p": False}}
     dev._expected_state = {"params": {"p": True}, "timestamp": 0}
+    # The echo gate only lets a correction through once the device has actually
+    # reported since the command went out.
+    dev._prop_echo_at = time.monotonic()
 
     retry_node = {"id": 42, "set": {"p": True}}
     async def fast_sleep(_):
@@ -765,9 +779,11 @@ async def test_verify_state_later_retries_on_mismatch(monkeypatch):
 
     monkeypatch.setattr(asyncio, "sleep", fast_sleep)
 
-    await dev._verify_state_later({"p": True}, "gateway_set.prop", retry_node, attempt=0)
+    await dev._verify_state_later(
+        {"p": True}, "gateway_set.prop", retry_node, attempt=0, sent_at=0.0,
+    )
 
-    # Should have sent a retry command
+    # One correction for the one disagreement the device actually reported.
     assert len(gw.sent) == 1
     method, _params, _wait, kwargs = gw.sent[0]
     assert method == "gateway_set.prop"
@@ -776,6 +792,12 @@ async def test_verify_state_later_retries_on_mismatch(monkeypatch):
     # Stats should be updated
     assert gw.stats.state_mismatches == 1
     assert gw.stats.state_corrections == 1
+
+    # The device said nothing after the correction, so the next attempt has no
+    # evidence to act on and the chain releases the shared state instead of
+    # resending against a stale cache.
+    assert dev._expected_state is None
+    assert dev._verify_task is None
 
 
 @pytest.mark.asyncio
@@ -790,6 +812,7 @@ async def test_verify_state_later_retries_on_ct_mismatch(monkeypatch):
 
     dev.prop["params"] = {"p": True, "ct": 3000}   # device currently at ct=3000
     dev._expected_state = {"params": {"p": True, "ct": 4000}, "timestamp": 0}
+    dev._prop_echo_at = time.monotonic()
 
     async def fast_sleep(_):
         return
@@ -797,7 +820,9 @@ async def test_verify_state_later_retries_on_ct_mismatch(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", fast_sleep)
 
     node = {"id": 42, "nt": 2, "set": {"p": True, "ct": 4000}}
-    await dev._verify_state_later({"p": True, "ct": 4000}, "gateway_set.prop", node, attempt=0)
+    await dev._verify_state_later(
+        {"p": True, "ct": 4000}, "gateway_set.prop", node, attempt=0, sent_at=0.0,
+    )
 
     assert len(gw.sent) == 1, "retry command must be sent on ct mismatch"
     method, _params, _wait, kwargs = gw.sent[0]
@@ -811,8 +836,6 @@ async def test_verify_state_later_retries_on_ct_mismatch(monkeypatch):
 @pytest.mark.asyncio
 async def test_verify_state_later_exhausts_retries(monkeypatch):
     """After STATE_VERIFY_RETRIES attempts, should log error and clear _expected_state."""
-    from custom_components.yeelight_pro.core.device import STATE_VERIFY_RETRIES
-
     dev = _make_light_device()
     gw = FakeGateway()
     dev.gateways.append(gw)  # type: ignore[arg-type]
@@ -922,6 +945,214 @@ async def test_set_prop_cancels_previous_verification():
     # Cleanup
     second_task.cancel()
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_set_prop_retry_chain_survives_eager_task_start(monkeypatch):
+    """Регрессия: цепочка повторов не должна обрываться после первой попытки.
+
+    hass.async_create_task стартует корутину немедленно (eager_start=True), то
+    есть тело _verify_state_later выполняется ДО присваивания self._verify_task.
+    Прежний код определял владение цепочкой через `self._verify_task is
+    current_task`, что в реальном HA всегда давало False — вторая попытка
+    никогда не планировалась и ошибка «verification failed» не логировалась.
+    """
+    from custom_components.yeelight_pro.core import device as device_module
+    from custom_components.yeelight_pro.core.gateway import GatewayStatistics
+
+    monkeypatch.setattr(device_module, "STATE_VERIFY_TIMEOUT", 0.01)
+
+    dev = _make_light_device()
+    gw = FakeGateway()
+    gw.stats = GatewayStatistics()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    # Устройство отвечает на каждую команду, но упорно сообщает p=False:
+    # это настоящее расхождение, а не молчание, поэтому коррекция уместна.
+    dev.prop = {"id": 42, "nt": 2, "params": {"p": False}}
+
+    async def echo_disagreement(method, params=None, wait_result=True, **kwargs):
+        gw.sent.append((method, params, wait_result, kwargs))
+        await dev.prop_changed({"id": 42, "params": {"p": False}})
+        return {"ok": True}
+
+    gw.send = echo_disagreement  # type: ignore[assignment]
+
+    await dev.set_prop(set={"p": True})
+    await asyncio.sleep(0.2)
+
+    # Исходная команда + по одной коррекции на каждую разрешённую попытку.
+    assert len(gw.sent) == 1 + STATE_VERIFY_RETRIES
+    assert gw.stats.state_corrections == STATE_VERIFY_RETRIES
+    # Цепочка исчерпана → общее состояние верификации освобождено.
+    assert dev._expected_state is None
+    assert dev._verify_task is None
+
+
+@pytest.mark.asyncio
+async def test_pending_correction_cannot_land_after_a_new_command(monkeypatch):
+    """Новая команда обязана отменять верификацию ДО отправки, а не после.
+
+    Раньше отмена стояла после await gateway.send(), из-за чего на время
+    отправки (а с ретраями — дольше) оставалось окно: старая коррекция успевала
+    сработать и прилететь на лампу ПОСЛЕ новой команды. Для пользователя это
+    выглядит как «нажал выключатель, а свет сделал противоположное».
+    """
+    from custom_components.yeelight_pro.core import device as device_module
+    from custom_components.yeelight_pro.core.gateway import GatewayStatistics
+
+    monkeypatch.setattr(device_module, "STATE_VERIFY_TIMEOUT", 0.05)
+
+    dev = _make_light_device()
+
+    class SlowGateway(FakeGateway):
+        """Отправка занимает дольше, чем дедлайн верификации."""
+
+        async def send(self, method, params=None, wait_result=True, **kwargs):
+            self.sent.append((method, params, wait_result, kwargs))
+            await asyncio.sleep(0.2)
+            return {"ok": True}
+
+    gw = SlowGateway()
+    gw.stats = GatewayStatistics()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    dev.prop = {"id": 42, "nt": 2, "params": {"p": False}}
+
+    # Команда 1: включить. Устройство отвечает, но сообщает p=False —
+    # настоящее расхождение, эхо-гейт открыт, коррекция была бы законной.
+    await dev.set_prop(set={"p": True})
+    await dev.prop_changed({"id": 42, "params": {"p": False}})
+
+    # Команда 2: выключить. Дедлайн верификации команды 1 истекает прямо
+    # посреди её отправки.
+    await dev.set_prop(set={"p": False})
+    await asyncio.sleep(0.1)
+
+    methods = [(m, kwargs.get("nodes")) for m, _p, _w, kwargs in gw.sent]
+    assert len(gw.sent) == 2, f"коррекция не должна была уйти: {methods}"
+    assert gw.sent[0][3]["nodes"] == [{"id": 42, "nt": 2, "set": {"p": True}}]
+    assert gw.sent[1][3]["nodes"] == [{"id": 42, "nt": 2, "set": {"p": False}}]
+    assert gw.stats.state_corrections == 0
+
+    await dev.async_cancel_verify_task()
+
+
+@pytest.mark.asyncio
+async def test_no_correction_while_device_has_not_reported(monkeypatch):
+    """Регрессия: молчание устройства — не доказательство провала команды.
+
+    prop_params обновляется только через gateway_post.prop. Пока эхо не пришло,
+    кэш хранит ДОкомандный снимок, поэтому сравнение с ним всегда «расходится» и
+    прежний код слал дубликат команды на лампу. На реальном железе эхо приходит
+    за 0.97-4.34 с, так что любой фиксированный дедлайн иногда истекает раньше.
+    """
+    from custom_components.yeelight_pro.core import device as device_module
+    from custom_components.yeelight_pro.core.gateway import GatewayStatistics
+
+    monkeypatch.setattr(device_module, "STATE_VERIFY_TIMEOUT", 0.01)
+
+    dev = _make_light_device()
+    gw = FakeGateway()
+    gw.stats = GatewayStatistics()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    # Лампа была выключена; шлём включение, эхо задерживается дольше дедлайна.
+    dev.prop = {"id": 42, "nt": 2, "params": {"p": False, "l": 80, "ct": 4000}}
+
+    await dev.set_prop(set={"p": True, "l": 80, "ct": 4000})
+    await asyncio.sleep(0.15)
+
+    assert len(gw.sent) == 1, "дубликат команды не должен уходить на лампу"
+    assert gw.stats.state_mismatches == 0
+    assert gw.stats.state_corrections == 0
+    assert dev._expected_state is None
+    assert dev._verify_task is None
+
+    # Опоздавшее эхо приходит уже после дедлайна — это нормальный путь, а не сбой.
+    await dev.prop_changed({"id": 42, "params": {"p": True, "l": 80, "ct": 4000}})
+    assert dev.prop_params["p"] is True
+    assert len(gw.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_state_later_aborts_when_epoch_superseded(monkeypatch):
+    """Устаревший запуск не должен ни слать коррекцию, ни трогать чужое состояние."""
+    from custom_components.yeelight_pro.core.gateway import GatewayStatistics
+
+    dev = _make_light_device()
+    gw = FakeGateway()
+    gw.stats = GatewayStatistics()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    dev.prop = {"id": 42, "nt": 2, "params": {"p": False}}
+
+    stale_epoch = dev._verify_epoch
+    # Пока эта задача спала, та же самая команда была отправлена повторно: epoch
+    # сдвинулся, а params ожидания совпадают — проверка на «устаревшее ожидание»
+    # такой случай не ловит, отличает запуски только epoch.
+    dev._verify_epoch += 1
+    dev._expected_state = {"params": {"p": True}, "timestamp": 1}
+    dev._prop_echo_at = time.monotonic()
+    sentinel_task = object()
+    dev._verify_task = sentinel_task  # type: ignore[assignment]
+
+    async def fast_sleep(_):
+        return
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    await dev._verify_state_later(
+        {"p": True}, "gateway_set.prop", {"id": 42, "set": {"p": True}},
+        epoch=stale_epoch, sent_at=0.0,
+    )
+
+    assert gw.sent == [], "устаревшая задача не должна слать коррекцию"
+    assert gw.stats.state_mismatches == 0
+    # Ожидание и задача более новой команды остались нетронутыми.
+    assert dev._expected_state == {"params": {"p": True}, "timestamp": 1}
+    assert dev._verify_task is sentinel_task
+
+
+@pytest.mark.asyncio
+async def test_verify_state_later_skips_resend_when_echo_lands_late(monkeypatch):
+    """Эхо, доставленное на последней уступке цикла, отменяет коррекцию.
+
+    Таймер верификации и читающий сокет просыпаются в одной пачке колбэков, и
+    порядок между ними произволен. Перед отправкой коррекции код уступает
+    управление и перечитывает params — подтверждённая команда не должна
+    отправляться повторно.
+    """
+    from custom_components.yeelight_pro.core.gateway import GatewayStatistics
+
+    dev = _make_light_device()
+    gw = FakeGateway()
+    gw.stats = GatewayStatistics()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    dev.prop = {"id": 42, "nt": 2, "params": {"p": False}}
+    dev._expected_state = {"params": {"p": True}, "timestamp": 0}
+    dev._prop_echo_at = time.monotonic()
+
+    calls = []
+
+    async def scripted_sleep(delay):
+        calls.append(delay)
+        if len(calls) == 2:
+            # Уступка перед отправкой: эхо доезжает именно здесь.
+            dev.prop["params"]["p"] = True
+
+    monkeypatch.setattr(asyncio, "sleep", scripted_sleep)
+
+    await dev._verify_state_later(
+        {"p": True}, "gateway_set.prop", {"id": 42, "set": {"p": True}},
+        attempt=0, sent_at=0.0,
+    )
+
+    assert gw.sent == [], "коррекция не нужна: состояние уже догнало ожидание"
+    assert gw.stats.state_corrections == 0
+    assert dev._expected_state is None
+    assert dev._verify_task is None
 
 
 @pytest.mark.asyncio

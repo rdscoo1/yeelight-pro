@@ -35,8 +35,14 @@ from homeassistant.components.climate.const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Passive state verification settings
-STATE_VERIFY_TIMEOUT = 2.5  # Seconds to wait for gateway_post.prop before retry
+# Passive state verification settings.
+# Measured gateway_post.prop echo latency on real hardware, over nine command/echo
+# pairs: 0.97, 1.50, 1.58, 2.01, 2.16, 2.21, 2.88, 3.31, 4.34 seconds. The tail is
+# long because the gateway serialises mesh writes, so the second node of a two-node
+# command waits behind the first. Any fixed deadline will sometimes expire before
+# the echo - that is why a deadline alone must never be read as "the command
+# failed"; see the echo gate in _verify_state_later.
+STATE_VERIFY_TIMEOUT = 8.0  # Seconds to wait for gateway_post.prop before retry
 STATE_VERIFY_RETRIES = 2  # Number of retry attempts on state mismatch
 
 
@@ -124,6 +130,16 @@ class XDevice:
         # Passive state verification
         self._expected_state: Optional[Dict] = None
         self._verify_task: Optional[asyncio.Task] = None
+        # Monotonic time of the last gateway_post.prop for this device. Verification
+        # compares against a cache that only these echoes refresh, so the cache is
+        # meaningless as evidence until the device has spoken since the command.
+        self._prop_echo_at: float = 0.0
+        # Bumped on every cancel/reschedule. A verification coroutine carries the
+        # epoch it was created under and may only touch shared verification state
+        # while that epoch is still current. Task identity cannot be used here:
+        # `hass.async_create_task` eager-starts the coroutine, so it runs before
+        # `self._verify_task` has been assigned and can never recognise itself.
+        self._verify_epoch: int = 0
 
     def setup_converters(self):
         pass
@@ -200,6 +216,8 @@ class XDevice:
         return res
 
     async def prop_changed(self, data: dict):
+        # Mark that the device has reported since whatever command is in flight.
+        self._prop_echo_at = time.monotonic()
         has_new = False
         for k in data.keys():
             if k not in self.prop:
@@ -386,10 +404,26 @@ class XDevice:
             return self.hass.async_create_task(coro)
         return asyncio.create_task(coro)
 
+    def _schedule_verify(self, coro: Coroutine[Any, Any, Any], epoch: int) -> None:
+        """Start a verification coroutine and track it as the current one.
+
+        `hass.async_create_task` eager-starts the coroutine, so a chain that
+        resolves without ever suspending has already published its own end state
+        (`_verify_task = None`) by the time the handle comes back. Storing a
+        finished handle over that would resurrect a verification that is over.
+        """
+        self._verify_task = None
+        task = self._create_task(coro)
+        if not task.done() and self._verify_epoch == epoch:
+            self._verify_task = task
+
     async def async_cancel_verify_task(self, clear_expected: bool = True) -> None:
         """Cancel the pending verification task, if any."""
         task = self._verify_task
         self._verify_task = None
+        # Invalidate any in-flight verification coroutine, including one that is
+        # already past its sleep and about to resend a correction.
+        self._verify_epoch += 1
         if clear_expected:
             self._expected_state = None
         if not task or task.done():
@@ -400,18 +434,64 @@ class XDevice:
         except asyncio.CancelledError:
             pass
 
-    async def _verify_state_later(self, expected: Dict, retry_cmd: str, retry_node: dict, attempt: int = 0):
+    async def _verify_state_later(
+        self,
+        expected: Dict,
+        retry_cmd: str,
+        retry_node: dict,
+        attempt: int = 0,
+        epoch: Optional[int] = None,
+        sent_at: Optional[float] = None,
+    ):
         """Passive state verification - waits for gateway_post.prop, retries on mismatch.
 
         Compares every key of `expected` (the `set` payload) against the merged
         device params. Keys the device never reports are unverifiable and skipped.
+
+        `epoch` is the value of `self._verify_epoch` this chain was scheduled under.
+        While it is still current this coroutine owns the shared verification state
+        (`_verify_task`, `_expected_state`) and may continue the retry chain; once a
+        newer command has bumped the epoch, this run is stale and must touch nothing.
+
+        `sent_at` is the monotonic time the command being verified went out, used to
+        tell a real disagreement from an echo that simply has not arrived yet.
         """
         try:
-            current_task = asyncio.current_task()
-            owns_retry_chain = current_task is not None and self._verify_task is current_task
+            if epoch is None:
+                epoch = self._verify_epoch
+            if sent_at is None:
+                sent_at = time.monotonic()
             await asyncio.sleep(STATE_VERIFY_TIMEOUT)
 
+            owns_retry_chain = self._verify_epoch == epoch
+            if not owns_retry_chain:
+                _LOGGER.debug(
+                    '[%s] Verification for %s superseded by a newer command, aborting',
+                    self.id, expected,
+                )
+                return
+
             if not self._expected_state:
+                _LOGGER.debug(
+                    '[%s] Verification for %s already resolved, nothing to check',
+                    self.id, expected,
+                )
+                return
+
+            # The echo gate. `prop_params` is refreshed only by gateway_post.prop, so
+            # until the device has reported since `sent_at` the cache still holds the
+            # pre-command snapshot. Comparing against it then does not measure the
+            # command at all - it measures the old state, always "disagrees", and
+            # resends. That is how a slow echo became a duplicate command at the
+            # light, at a rate of hundreds a day. Silence is not evidence of failure.
+            if self._prop_echo_at <= sent_at:
+                _LOGGER.debug(
+                    '[%s] No state report since command %s was sent %.1fs ago; '
+                    'nothing to verify against, skipping correction',
+                    self.id, expected, STATE_VERIFY_TIMEOUT,
+                )
+                self._expected_state = None
+                self._verify_task = None
                 return
 
             params = self.prop_params
@@ -427,8 +507,7 @@ class XDevice:
                     self.id, STATE_VERIFY_TIMEOUT, sorted(expected),
                 )
                 self._expected_state = None
-                if owns_retry_chain:
-                    self._verify_task = None
+                self._verify_task = None
                 return
 
             # Exact equality: correct for discrete keys (p, switch channels) but a
@@ -439,17 +518,46 @@ class XDevice:
             if not mismatched:
                 _LOGGER.debug('[%s] State verified after timeout: %s', self.id, reported)
                 self._expected_state = None
-                if owns_retry_chain:
-                    self._verify_task = None
+                self._verify_task = None
                 return
 
             if attempt < STATE_VERIFY_RETRIES:
+                # Re-check right before acting. A newer command may have superseded
+                # this expectation, or a late echo may have caught the state up since
+                # the deadline above - resending in either case pushes a stale command
+                # at a light whose state is already what somebody wanted.
                 current_expected = self._expected_state.get('params') if self._expected_state else None
                 if current_expected != expected:
                     _LOGGER.debug(
                         '[%s] Verify task for %s is stale (current expected %s), aborting',
                         self.id, expected, current_expected,
                     )
+                    return
+
+                # Give the read loop one chance to deliver an echo that is already
+                # on the wire but not yet dispatched: our timer and the socket
+                # reader wake in the same batch and the order between them is
+                # arbitrary. Without this yield a command the gateway did confirm
+                # can still be resent.
+                await asyncio.sleep(0)
+                if self._verify_epoch != epoch or not self._expected_state:
+                    _LOGGER.debug(
+                        '[%s] Verification for %s resolved while yielding, skipping resend',
+                        self.id, expected,
+                    )
+                    return
+
+                fresh = self.prop_params
+                still_wrong = {
+                    k: fresh[k] for k in mismatched if k in fresh and fresh[k] != expected[k]
+                }
+                if not still_wrong:
+                    _LOGGER.debug(
+                        '[%s] State caught up before correction, skipping resend: %s',
+                        self.id, expected,
+                    )
+                    self._expected_state = None
+                    self._verify_task = None
                     return
 
                 if self.gateway:
@@ -461,14 +569,21 @@ class XDevice:
                 )
 
                 if self.gateway:
+                    resent_at = time.monotonic()
                     result = await self.gateway.send(retry_cmd, nodes=[retry_node])
                     if result:
                         self.gateway.stats.state_corrections += 1
                         _LOGGER.info('[%s] State correction command sent', self.id)
 
-                    if owns_retry_chain:
-                        self._verify_task = self._create_task(
-                            self._verify_state_later(expected, retry_cmd, retry_node, attempt + 1)
+                    # Continue the chain unless a newer command took over while the
+                    # correction was in flight.
+                    if self._verify_epoch == epoch:
+                        self._schedule_verify(
+                            self._verify_state_later(
+                                expected, retry_cmd, retry_node, attempt + 1, epoch,
+                                sent_at=resent_at,
+                            ),
+                            epoch,
                         )
             else:
                 _LOGGER.error(
@@ -476,11 +591,15 @@ class XDevice:
                     self.id, STATE_VERIFY_RETRIES, expected, reported,
                 )
                 self._expected_state = None
-                if owns_retry_chain:
-                    self._verify_task = None
+                self._verify_task = None
 
         except asyncio.CancelledError:
-            pass
+            # Re-raise so the task reports as cancelled. Swallowing it made a
+            # cancelled verification look like a completed one, which breaks
+            # cooperative cancellation during reload/shutdown. Callers that cancel
+            # (async_cancel_verify_task) already absorb it.
+            _LOGGER.debug('[%s] Verification for %s cancelled', self.id, expected)
+            raise
 
     async def set_prop(self, **kwargs):
         """Set device properties with passive state verification.
@@ -505,17 +624,29 @@ class XDevice:
             **kwargs,
         }
         
+        if expected_params:
+            # Supersede any pending verification BEFORE this command goes out.
+            # Cancelling afterwards left a window the length of the send (longer
+            # with retry backoff) in which an older correction could still fire and
+            # land after the new command - the light would then obey the previous
+            # intent, which reads as "I pressed the switch and it did the opposite".
+            await self.async_cancel_verify_task()
+
+        sent_at = time.monotonic()
         result = await self.gateway.send(cmd, nodes=[node])
         
         # Schedule passive verification if enabled and something was set
         if verify and result and expected_params:
-            await self.async_cancel_verify_task()
             self._expected_state = {
                 'params': expected_params,
                 'timestamp': time.time(),
             }
-            self._verify_task = self._create_task(
-                self._verify_state_later(expected_params, cmd, node)
+            epoch = self._verify_epoch
+            self._schedule_verify(
+                self._verify_state_later(
+                    expected_params, cmd, node, epoch=epoch, sent_at=sent_at,
+                ),
+                epoch,
             )
             _LOGGER.debug('[%s] Scheduled passive verification for %s', self.id, expected_params)
         
