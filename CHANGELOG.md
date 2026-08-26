@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Fixed the passive-verification retry chain never running past its first attempt. `hass.async_create_task` eager-starts the coroutine, so the verification task ran before `_verify_task` was assigned and could never recognise itself through `asyncio.current_task()`; ownership is now tracked with an explicit epoch counter. Symptoms in the log were a lone `retry 1/2` with no follow-up and a `_expected_state` that was never released
+- Stopped reading gateway silence as command failure. `prop_params` is refreshed only by `gateway_post.prop`, so until the device reports back the cache still holds the pre-command snapshot; comparing against it did not measure the command at all, always "disagreed", and resent. Verification now requires an echo newer than the command before it will correct anything. This was firing hundreds of times a day, and every false correction put a duplicate `gateway_set.prop` on the mesh
+- Cancelled a pending verification *before* the next command goes out instead of after. The old ordering left a window the length of the send (longer with retry backoff) in which a stale correction could fire and land after the new command, so the light received e.g. ON → OFF → ON and ended up obeying the previous intent — the user-visible "I pressed the switch and it did the opposite"
+- Raised `STATE_VERIFY_TIMEOUT` from 2.5s to 8.0s. Measured `gateway_post.prop` echo latency on real hardware spans 0.97-4.34s (the gateway serialises mesh writes, so the second node of a two-node command waits behind the first), and the old 2.5s window sat inside that range
+- Skipped the correction resend when the state has already caught up: the verification now yields once before acting, giving an echo that is on the wire but not yet dispatched a chance to land, and re-reads the merged params before resending
+- Stopped swallowing `asyncio.CancelledError` in the verification task, which made a cancelled verification look like a completed one and broke cooperative cancellation on reload and shutdown
+
+### Testing
+- Switched the test `FakeHass` to eager task start, matching real `HomeAssistant.async_create_task`; the lazy `loop.create_task` it used before masked this whole class of bug
+- Added regression coverage for the echo gate (a slow echo must not produce a duplicate command), a stale correction being unable to land after a newer command, the retry chain surviving eager task start, a superseded (stale-epoch) verification touching no shared state, and a late echo cancelling the correction resend
+
 ## [1.4.0] - 2026-07-15
 
 ### Fixed
