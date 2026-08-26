@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.4.1] - 2026-08-26
 
 ### Fixed
 - Fixed the passive-verification retry chain never running past its first attempt. `hass.async_create_task` eager-starts the coroutine, so the verification task ran before `_verify_task` was assigned and could never recognise itself through `asyncio.current_task()`; ownership is now tracked with an explicit epoch counter. Symptoms in the log were a lone `retry 1/2` with no follow-up and a `_expected_state` that was never released
