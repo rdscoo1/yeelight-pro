@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import time
 
 import pytest
@@ -63,6 +64,13 @@ class FakeGateway:
         return {"ok": True}
 
 
+# asyncio.Task(eager_start=...) landed in Python 3.12; Home Assistant's own
+# create_eager_task relies on it. On 3.11 the fake falls back to lazy scheduling,
+# so the eager-start regressions below still run, they just do not exercise the
+# eager path there.
+SUPPORTS_EAGER_TASKS = sys.version_info >= (3, 12)
+
+
 class FakeHass:
     """Простейший hass с async_create_task.
 
@@ -79,7 +87,10 @@ class FakeHass:
         self.created_tasks = []
 
     def async_create_task(self, coro):
-        task = asyncio.Task(coro, loop=self.loop, eager_start=True)
+        if SUPPORTS_EAGER_TASKS:
+            task = asyncio.Task(coro, loop=self.loop, eager_start=True)
+        else:
+            task = self.loop.create_task(coro)
         self.created_tasks.append(task)
         return task
 
@@ -792,6 +803,11 @@ async def test_verify_state_later_retries_on_mismatch(monkeypatch):
     # Stats should be updated
     assert gw.stats.state_mismatches == 1
     assert gw.stats.state_corrections == 1
+
+    # Под ленивым планированием (Python 3.11) звено цепочки ещё не выполнялось;
+    # при eager-старте оно уже отработало синхронно и обнулило _verify_task.
+    if dev._verify_task is not None:
+        await dev._verify_task
 
     # The device said nothing after the correction, so the next attempt has no
     # evidence to act on and the chain releases the shared state instead of
