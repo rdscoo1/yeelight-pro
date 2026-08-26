@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Chore
+- Added the MIT `LICENSE` file both READMEs already declared and linked to, clearing the only failing HACS validation check
+- Bumped CI actions off the deprecated Node 20 runtime (`actions/checkout` v4 → v7, `actions/setup-python` v5 → v7, `codecov/codecov-action` v4 → v7, whose `file` input is now `files`)
+
 ## [1.4.1] - 2026-08-26
 
 ### Fixed
