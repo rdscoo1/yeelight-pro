@@ -119,6 +119,8 @@ class ProGateway:
         self._reconnect_delay: float = MIN_RECONNECT_DELAY
         self._stopping: bool = False
         self._json_error_count: int = 0
+        # Consecutive requests that timed out with no inbound traffic at all.
+        self._silent_timeouts: int = 0
         self._last_topology_devices: Set[Union[str, int]] = set()
         self._was_connected: bool = False
         self._connect_lock = asyncio.Lock()
@@ -369,6 +371,7 @@ class ProGateway:
             self.log.info('[%s] Connected successfully', self.host)
             self._connected.set()
             self._wakeup.clear()  # a wake for this attempt must not skip the next backoff
+            self._silent_timeouts = 0
 
             self._update_connection_state(True)
             if self._was_connected:
@@ -595,6 +598,7 @@ class ProGateway:
             dat = json.loads(msg.decode()) or {}
             # Reset error count on successful parse
             self._json_error_count = 0
+            self._silent_timeouts = 0
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             self._json_error_count += 1
             self.log.error('[%s] JSON decode error (%d/%d): %s; raw=%r', 
@@ -735,6 +739,7 @@ class ProGateway:
                     self._msgs[cid] = fut
                     own_waiter = True
 
+            sent_at = time.time()
             if should_send:
                 dat = {
                     'id': cid,
@@ -778,6 +783,15 @@ class ProGateway:
             self.log.debug('[%s] Timeout waiting for %s', self.host, method)
             if own_waiter and not fut.done():
                 fut.cancel()
+            if self.stats.last_message_time < sent_at:
+                # Nothing at all came back. A half-open link (gateway lost power or
+                # Wi-Fi) still accepts writes, so without this every command burns
+                # its whole retry budget until the keepalive notices, 35-70 s later.
+                self._silent_timeouts += 1
+                if self._silent_timeouts >= KEEPALIVE_FAILURE_THRESHOLD and self.writer:
+                    self.log.warning('[%s] %d requests in a row got nothing back, reconnecting',
+                                     self.host, self._silent_timeouts)
+                    await self._close_connection()
             return None
         except asyncio.CancelledError:
             # Two different things land here. If _close_connection cancelled our

@@ -1377,3 +1377,31 @@ async def test_retry_keeps_only_keys_not_superseded(monkeypatch):
     assert await first
     assert wire == [{"p": True, "c": 255}, {"p": False}, {"c": 255}]
     assert first_set == {"p": True, "c": 255}  # caller's dict untouched
+
+
+# ---------- dead-link detection ----------
+
+
+@pytest.mark.asyncio
+async def test_link_with_no_traffic_back_is_dropped_after_two_silent_timeouts():
+    """Half-open TCP: writes succeed, nothing comes back. Don't wait ~70 s for keepalive."""
+    gtw = ProGateway("1.2.3.4", timeout=0.01)
+    gtw.writer = DummyWriter()
+
+    assert await gtw._send_internal("gateway_set.prop", nodes=[]) is None
+    assert gtw.writer is not None  # one silent timeout can be a busy gateway
+
+    assert await gtw._send_internal("gateway_set.prop", nodes=[]) is None
+    assert gtw.writer is None
+
+
+@pytest.mark.asyncio
+async def test_any_inbound_message_resets_the_silent_timeout_count():
+    gtw = ProGateway("1.2.3.4", timeout=0.01)
+    gtw.writer = DummyWriter()
+
+    await gtw._send_internal("gateway_set.prop", nodes=[])
+    await gtw.on_message(b'{"method": "gateway_post.prop", "nodes": []}')
+    await gtw._send_internal("gateway_set.prop", nodes=[])
+
+    assert gtw.writer is not None
