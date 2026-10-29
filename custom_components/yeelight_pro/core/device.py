@@ -646,7 +646,14 @@ class XDevice:
         epoch = self._verify_epoch
 
         sent_at = time.monotonic()
-        result = await self.gateway.send(cmd, nodes=[node])
+        try:
+            result = await self.gateway.send(cmd, nodes=[node])
+        except BaseException:
+            # Cancelled or failed send: release the expectation registered above so
+            # the next command does not merge (and later "correct") these keys.
+            if self._verify_epoch == epoch and expected:
+                self._expected_state = None
+            raise
 
         if self._verify_epoch != epoch or not expected:
             # Superseded or already confirmed while in flight: scheduling now would

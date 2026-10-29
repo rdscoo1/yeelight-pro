@@ -1273,9 +1273,10 @@ async def test_slow_older_command_does_not_take_over_verification():
 
 @pytest.mark.asyncio
 async def test_superseded_retry_success_does_not_verify_older_intent():
-    """Older {p:True, c:255} loses its ack; a newer {p:False} goes out; the
-    gateway's superseded retry resends only {c:255} and succeeds AFTER the newer
-    send. The older set_prop's truthy result must not schedule a check of p:True."""
+    """Older {p:True, c:255} is still in flight when a newer {p:False} goes out,
+    and the older send resolves (truthy) AFTER the newer one - as when the
+    gateway's superseded retry resends the leftover keys. The older set_prop must
+    not schedule a check of p:True."""
     dev = _make_light_device()
 
     class AckGateway(FakeGateway):
@@ -1303,7 +1304,8 @@ async def test_superseded_retry_success_does_not_verify_older_intent():
 
     params = dev._expected_state["params"]
     assert params["p"] is False
-    # c:255 was really sent (by the stripped retry), so it may stay verified.
+    # c:255 is carried over by the newer set_prop merging the older command's
+    # still-unconfirmed keys into its expectation.
     assert params == {"p": False, "c": 255}
     await dev.async_cancel_verify_task()
 
@@ -1321,4 +1323,32 @@ async def test_commands_on_one_device_are_all_verified():
     )
 
     assert dev._expected_state["params"] == {"1-sp": False, "2-sp": False}
+    await dev.async_cancel_verify_task()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_send_releases_expectation():
+    """A set_prop cancelled mid-send must not leave its keys to be merged into
+    (and later 'corrected' by) the next command's verification."""
+    dev = _make_light_device()
+
+    class HangGateway(FakeGateway):
+        async def send(self, method, params=None, wait_result=True, **kwargs):
+            await asyncio.get_running_loop().create_future()
+
+    dev.gateways.append(HangGateway())  # type: ignore[arg-type]
+
+    task = asyncio.create_task(dev.set_prop(set={"p": True}))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert dev._expected_state is None
+
+    dev.gateways.clear()
+    dev.gateways.append(FakeGateway())  # type: ignore[arg-type]
+    await dev.set_prop(set={"l": 50})
+
+    assert dev._expected_state["params"] == {"l": 50}
     await dev.async_cancel_verify_task()
