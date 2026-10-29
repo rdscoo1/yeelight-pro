@@ -515,9 +515,9 @@ class XEntity(Entity):
 
     @property
     def available(self) -> bool:
-        """Unavailable while the gateway link is down: commands could not reach the device."""
+        """Unavailable once reconnecting has failed: commands could not reach the device."""
         gateway = self.device.gateway
-        return bool(self._attr_available) and (gateway is None or gateway.is_connected)
+        return bool(self._attr_available) and (gateway is None or not gateway.link_down)
 
     @callback
     def async_restore_last_state(self, state: str, attrs: dict):

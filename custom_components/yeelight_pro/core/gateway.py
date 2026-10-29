@@ -127,6 +127,10 @@ class ProGateway:
         self._last_rx_mono: float = 0.0
         self._last_topology_devices: Set[Union[str, int]] = set()
         self._was_connected: bool = False
+        # True once a reconnect attempt has failed. A bare link drop does not set
+        # it: commands sent in a brief reconnect window wait for the link instead
+        # of being silently skipped by HA as calls on unavailable entities.
+        self.link_down: bool = False
         self._connect_lock = asyncio.Lock()
         self._send_lock = asyncio.Lock()
         self._background_tasks: Set[asyncio.Task] = set()
@@ -284,6 +288,7 @@ class ProGateway:
         while not self._stopping:
             try:
                 if not await self.connect():
+                    self._set_link_down(True)
                     delay = self._reconnect_delay
                     self.log.debug('[%s] Reconnect in %.1f seconds', self.host, delay)
                     await self._backoff_sleep(delay)
@@ -298,6 +303,7 @@ class ProGateway:
                 # wait (Branch 2 below) always starts from MIN_RECONNECT_DELAY.
                 self._reconnect_delay = MIN_RECONNECT_DELAY
                 self._json_error_count = 0
+                self._set_link_down(False)
                 
                 # Start keepalive task
                 self._keepalive_task = asyncio.create_task(self._keepalive_loop())
@@ -902,13 +908,19 @@ class ProGateway:
         }
 
     def _update_connection_state(self, connected: bool) -> None:
-        """Update the gateway device and re-publish every device entity.
-
-        Device entities derive `available` from is_connected, so a state write
-        is all they need to pick up the change.
-        """
+        """Update the gateway device."""
         if self.device:
             self.device.update({'connection': connected, 'available': connected})
+
+    def _set_link_down(self, down: bool) -> None:
+        """Set link_down and re-publish every device entity on a change.
+
+        Device entities derive `available` from link_down, so a state write is
+        all they need to pick up the change.
+        """
+        if self.link_down == down:
+            return
+        self.link_down = down
         for dvc in self.devices.values():
             if dvc is self.device:
                 continue

@@ -556,6 +556,32 @@ async def test_run_forever_waits_before_reconnect_after_disconnect(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_forever_flags_link_down_only_after_a_failed_connect(monkeypatch):
+    """A failed connect marks the link down; the next successful one clears it."""
+    gtw = ProGateway("1.2.3.4")
+    seen = []
+
+    async def fake_connect(self):
+        seen.append(self.link_down)
+        return len(seen) > 1
+
+    async def fake_read_loop(self):
+        seen.append(self.link_down)
+        raise asyncio.CancelledError()
+
+    async def fake_backoff_sleep(self, delay):
+        pass
+
+    monkeypatch.setattr(ProGateway, "connect", fake_connect, raising=True)
+    monkeypatch.setattr(ProGateway, "_read_loop", fake_read_loop, raising=True)
+    monkeypatch.setattr(ProGateway, "_backoff_sleep", fake_backoff_sleep, raising=True)
+
+    await gtw.run_forever()
+
+    assert seen == [False, True, False]
+
+
+@pytest.mark.asyncio
 async def test_read_loop_handles_connection_closed():
     """_read_loop должен корректно обрабатывать закрытие соединения."""
     gtw = ProGateway("1.2.3.4")

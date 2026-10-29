@@ -91,7 +91,6 @@ async def test_topology_registers_entities_through_platform_setup_callbacks(hass
 
 async def test_topology_removal_marks_existing_entities_unavailable(hass):
     gateway, added = _gateway_with_platform_setups(hass)
-    gateway.writer = object()  # the TCP link is up
 
     await gateway.on_message(
         json.dumps(
@@ -126,9 +125,8 @@ async def test_topology_removal_marks_existing_entities_unavailable(hass):
     assert light.available is False
 
 
-async def test_device_entities_go_unavailable_while_gateway_is_disconnected(hass):
+async def test_device_entities_go_unavailable_only_after_a_failed_reconnect(hass):
     gateway, added = _gateway_with_platform_setups(hass)
-    gateway.writer = object()  # the TCP link is up
 
     await gateway.on_message(
         json.dumps(
@@ -148,7 +146,12 @@ async def test_device_entities_go_unavailable_while_gateway_is_disconnected(hass
     light.added = True
     light.async_write_ha_state = lambda: writes.append(light.available)
 
-    gateway.writer = None  # link down
+    # A bare link drop keeps entities available: commands wait for the reconnect.
     gateway._update_connection_state(False)
+    assert light.available is True
+    assert writes == []
 
-    assert writes == [False]
+    gateway._set_link_down(True)  # a reconnect attempt failed
+    gateway._set_link_down(False)  # and a later one succeeded
+
+    assert writes == [False, True]
