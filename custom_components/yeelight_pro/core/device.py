@@ -651,20 +651,28 @@ class XDevice:
         
         expected = None
         if expected_params:
-            # Keys an earlier command set that no echo has confirmed yet. On a
-            # multi-gang panel every channel is its own command, so replacing the
-            # expectation would drop verification for all channels but the last.
-            unconfirmed = (self._expected_state or {}).get('params') or {}
             # Supersede any pending verification BEFORE this command goes out.
             # Cancelling afterwards left a window the length of the send (longer
             # with retry backoff) in which an older correction could still fire and
             # land after the new command - the light would then obey the previous
             # intent, which reads as "I pressed the switch and it did the opposite".
-            await self.async_cancel_verify_task()
+            await self.async_cancel_verify_task(clear_expected=not verify)
+            # No await from here to the send. Concurrent commands (HA's "all off"
+            # on a multi-gang panel) interleave at the yield above, so the last one
+            # past it must see every earlier merge and hold the newest epoch.
+            if self._verify_task:
+                # Scheduled by a concurrent command while we yielded; the epoch
+                # bump below makes it stale, cancel it so it does not linger.
+                self._verify_task.cancel()
+                self._verify_task = None
+            self._verify_epoch += 1
             if verify:
+                # Keys an earlier command set that no echo has confirmed yet. On a
+                # multi-gang panel every channel is its own command, so replacing the
+                # expectation would drop verification for all channels but the last.
+                unconfirmed = (self._expected_state or {}).get('params') or {}
                 expected = {**unconfirmed, **expected_params}
-                # Registered before sending: a concurrent command for another key
-                # merges it, and an echo that beats the ack can confirm it.
+                # Registered before sending: an echo that beats the ack can confirm it.
                 self._expected_state = {'params': expected, 'timestamp': time.time()}
         # This command owns verification until a newer one (or a confirming echo)
         # bumps the epoch.

@@ -1476,3 +1476,19 @@ async def test_verification_never_undoes_a_later_physical_press(monkeypatch):
     resent = [kw["nodes"][0]["set"] for _m, _p, _w, kw in gw.sent[3:]]
     assert resent and all(s == {"3-p": False} for s in resent)
     await dev.async_cancel_verify_task()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_channel_commands_are_all_verified():
+    """HA's 'all off' on a 3-gang panel runs the three commands concurrently:
+    none of the channels may drop out of verification, and only one check runs."""
+    dev = make_xdevice()
+    dev.gateways.append(FakeGateway())  # type: ignore[arg-type]
+
+    await asyncio.gather(*(dev.set_prop(set={f"{i}-p": False}) for i in (1, 2, 3)))
+    await asyncio.sleep(0)
+
+    assert dev._expected_state["params"] == {"1-p": False, "2-p": False, "3-p": False}
+    live = [t for t in dev.hass.created_tasks if not t.done()]
+    assert live == [dev._verify_task]
+    await dev.async_cancel_verify_task()
