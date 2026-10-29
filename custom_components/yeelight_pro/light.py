@@ -172,8 +172,6 @@ class XLightEntity(XEntity, LightEntity):
             self._attr_is_on = on
             if self.added:
                 self.async_write_ha_state()
-        else:
-            _LOGGER.warning('%s: Turn %s failed', self.entity_id, 'on' if on else 'off')
         return ret
 
     async def async_prestage_color_temp(self, **kwargs):

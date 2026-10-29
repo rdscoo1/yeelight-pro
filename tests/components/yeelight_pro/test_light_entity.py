@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components.light import (
     ColorMode,
     LightEntityFeature,
@@ -325,3 +326,19 @@ async def test_turn_on_color_temp_reaches_gateway_as_ct(monkeypatch):
     await entity.async_turn_on(**{ATTR_COLOR_TEMP_KELVIN: 4000})
 
     assert captured["set"]["ct"] == 4000
+
+
+@pytest.mark.asyncio
+async def test_turn_on_raises_when_gateway_does_not_confirm(monkeypatch):
+    """A failed command must reach the user, not just the log."""
+    device, conv = make_light_device()
+    entity = XLightEntity(device, conv)
+
+    async def fake_set_prop(**kwargs):
+        return None  # retries exhausted / link down
+
+    monkeypatch.setattr(device, "set_prop", fake_set_prop)
+
+    with pytest.raises(HomeAssistantError):
+        await entity.async_turn_on()
+    assert entity.is_on is None  # no optimistic state for a failed command

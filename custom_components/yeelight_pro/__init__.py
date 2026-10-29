@@ -12,6 +12,7 @@ from homeassistant.const import (
     SERVICE_RELOAD,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import Entity, DeviceInfo
 from homeassistant.helpers.reload import (
     async_integration_yaml_config,
@@ -539,4 +540,9 @@ class XEntity(Entity):
         if not payload:
             _LOGGER.warning('%s: Empty payload after encoding %s', self.entity_id, value)
             return False
-        return await self.device.set_prop(**payload)
+        ret = await self.device.set_prop(**payload)
+        if not ret:
+            # Surface it: otherwise the UI toggle just snaps back and automations
+            # carry on as if the device had switched.
+            raise HomeAssistantError(f'{self.device.name}: gateway did not confirm the command')
+        return ret
