@@ -1352,3 +1352,76 @@ async def test_cancelled_send_releases_expectation():
 
     assert dev._expected_state["params"] == {"l": 50}
     await dev.async_cancel_verify_task()
+
+
+# ---------- read-back on silence ----------
+
+
+@pytest.mark.asyncio
+async def test_silent_device_is_read_back_and_corrected(monkeypatch):
+    """Acked but never executed: no echo ever comes. Read the state and fix it."""
+    from custom_components.yeelight_pro.core import device as device_module
+    from custom_components.yeelight_pro.core.gateway import GatewayStatistics
+
+    monkeypatch.setattr(device_module, "STATE_VERIFY_TIMEOUT", 0.01)
+
+    class DroppingGateway(FakeGateway):
+        """Acks everything; the mesh drops the first command only. Never echoes."""
+
+        def __init__(self):
+            super().__init__()
+            self.stats = GatewayStatistics()
+            self.lamp = {"p": False}
+
+        async def send(self, method, params=None, wait_result=True, **kwargs):
+            self.sent.append((method, params, wait_result, kwargs))
+            if len(self.sent) > 1:
+                self.lamp.update(kwargs["nodes"][0]["set"])
+            return {"ok": True}
+
+        async def get_node(self, node_id, wait_result=False):
+            self.get_node_calls.append((node_id, wait_result))
+            return {"id": 9001, "nodes": [{"id": node_id, "params": dict(self.lamp)}]}
+
+    dev = _make_light_device()
+    gw = DroppingGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+    dev.prop = {"id": 42, "nt": 2, "params": {"p": False}}
+
+    await dev.set_prop(set={"p": True})
+    await asyncio.sleep(0.2)
+
+    assert gw.get_node_calls[0] == (42, True)
+    assert len(gw.sent) == 2  # the dropped command and one correction
+    assert gw.sent[1][3]["nodes"] == [{"id": 42, "nt": 2, "set": {"p": True}}]
+    assert gw.stats.state_corrections == 1
+    assert dev._expected_state is None
+    assert dev._verify_task is None
+
+
+@pytest.mark.asyncio
+async def test_silent_device_confirmed_by_read_back_is_not_resent(monkeypatch):
+    """A no-op command (lamp already on) never echoes either; read-back confirms it."""
+    from custom_components.yeelight_pro.core import device as device_module
+    from custom_components.yeelight_pro.core.gateway import GatewayStatistics
+
+    monkeypatch.setattr(device_module, "STATE_VERIFY_TIMEOUT", 0.01)
+
+    class OnGateway(FakeGateway):
+        async def get_node(self, node_id, wait_result=False):
+            self.get_node_calls.append((node_id, wait_result))
+            return {"id": 9001, "nodes": [{"id": node_id, "params": {"p": True}}]}
+
+    dev = _make_light_device()
+    gw = OnGateway()
+    gw.stats = GatewayStatistics()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+    dev.prop = {"id": 42, "nt": 2, "params": {"p": True}}
+
+    await dev.set_prop(set={"p": True})
+    await asyncio.sleep(0.05)
+
+    assert gw.get_node_calls == [(42, True)]
+    assert len(gw.sent) == 1
+    assert dev._expected_state is None
+    assert dev._verify_task is None

@@ -426,13 +426,29 @@ class XDevice:
         self._verify_epoch += 1
         if clear_expected:
             self._expected_state = None
-        if not task or task.done():
+        if not task or task.done() or task is asyncio.current_task():
+            # A verification resolved by its own read-back lands here from inside
+            # itself; the epoch bump above already ended it, and a task cannot
+            # await itself.
             return
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
+
+    async def _read_back(self) -> None:
+        """Ask the gateway for this node's current state and apply it.
+
+        A reply delivered as *_post.prop has already been applied by
+        on_message; any other reply carrying our node is applied here.
+        """
+        reply = await self.gateway.get_node(self.id, wait_result=True)
+        if not reply or reply.get('method') in ('gateway_post.prop', 'device_post.prop'):
+            return
+        for node in reply.get('nodes') or []:
+            if node.get('id') == self.id:
+                await self.prop_changed(node)
 
     async def _verify_state_later(
         self,
@@ -483,7 +499,16 @@ class XDevice:
             # pre-command snapshot. Comparing against it then does not measure the
             # command at all - it measures the old state, always "disagrees", and
             # resends. That is how a slow echo became a duplicate command at the
-            # light, at a rate of hundreds a day. Silence is not evidence of failure.
+            # light, at a rate of hundreds a day. Silence is not evidence of failure,
+            # but it is not evidence of success either: a command the mesh dropped
+            # never echoes, while the entity already shows the new state. Ask once.
+            if self._prop_echo_at <= sent_at and self.gateway:
+                await self._read_back()
+                if self._verify_epoch != epoch or not self._expected_state:
+                    _LOGGER.debug(
+                        '[%s] Verification for %s resolved by read-back', self.id, expected,
+                    )
+                    return
             if self._prop_echo_at <= sent_at:
                 _LOGGER.debug(
                     '[%s] No state report since command %s was sent %.1fs ago; '
