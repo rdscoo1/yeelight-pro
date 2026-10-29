@@ -1292,3 +1292,35 @@ async def test_send_from_main_task_does_not_wait_for_its_own_reconnect():
     )
 
     assert result is None
+
+
+# ---------- retry superseding ----------
+
+
+@pytest.mark.asyncio
+async def test_retry_is_dropped_once_a_newer_command_targets_the_same_node(monkeypatch):
+    """Wire order ON -> OFF -> ON-retry left the light on after the user turned it off."""
+    gtw = ProGateway("1.2.3.4")
+    wire = []
+    first = [True]
+
+    async def fake_send_internal(method, wait_result=True, **kwargs):
+        wire.append("ON" if kwargs["nodes"][0]["set"]["p"] else "OFF")
+        if first[0]:  # the ON's ack is lost
+            first[0] = False
+            await asyncio.sleep(0.05)
+            return None
+        return {"ok": True}
+
+    monkeypatch.setattr(gtw, "_send_internal", fake_send_internal)
+    monkeypatch.setattr("custom_components.yeelight_pro.core.gateway.RETRY_DELAY_BASE", 0.01)
+
+    on = asyncio.create_task(
+        gtw.send("gateway_set.prop", nodes=[{"id": 7, "nt": 2, "set": {"p": True}}])
+    )
+    await asyncio.sleep(0.01)
+    await gtw.send("gateway_set.prop", nodes=[{"id": 7, "nt": 2, "set": {"p": False}}])
+
+    assert await on is None
+    assert wire == ["ON", "OFF"]
+    assert gtw.stats.commands_failed == 0  # superseded is not failed

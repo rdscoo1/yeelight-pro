@@ -128,7 +128,9 @@ class ProGateway:
         self._connected = asyncio.Event()
         # Set by a sender to cut run_forever's reconnect backoff short.
         self._wakeup = asyncio.Event()
-        
+        # node id -> token of the newest command that set state on it (see _send_with_retry).
+        self._latest_set: Dict[Union[str, int], object] = {}
+
         # Statistics for diagnostics
         self.stats = GatewayStatistics()
 
@@ -459,8 +461,21 @@ class ProGateway:
         # Fire-and-forget: a None return from _send_internal is normal - don't
         # treat it as failure and don't retry.
         wait_result = kwargs.get('wait_result', True)
+        # A retry must never land after a newer state command for the same node:
+        # ON (ack lost) -> OFF -> ON-retry leaves the light on against the user.
+        token = object()
+        targets = [
+            n['id'] for n in kwargs.get('nodes') or ()
+            if isinstance(n, dict) and 'set' in n and 'id' in n
+        ]
+        for nid in targets:
+            self._latest_set[nid] = token
 
         for attempt in range(retries):
+            if attempt and any(self._latest_set.get(nid) is not token for nid in targets):
+                self.log.debug('[%s] Dropping retry of %s: superseded by a newer command',
+                               self.host, method)
+                return None
             try:
                 result = await self._send_internal(method, **kwargs)
                 if result is not None:
