@@ -18,6 +18,7 @@ from . import (
     platform_setup_factory,
 )
 from .core.device import GatewayDevice
+from .core.const import DEFAULT_TRANSITION_TIME
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -169,7 +170,7 @@ class XDiagnosticsSensor(XEntity, SensorEntity):
             'keepalive_success': diag.get('keepalive_success', 0),
             'keepalive_failed': diag.get('keepalive_failed', 0),
             'last_error': diag.get('last_error'),
-            'transition_time': diag.get('transition_time', 5.0),
+            'transition_time': diag.get('transition_time', DEFAULT_TRANSITION_TIME),
         }
     
     @staticmethod

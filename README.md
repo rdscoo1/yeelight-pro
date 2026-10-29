@@ -93,9 +93,11 @@ Open the integration options to adjust:
 | Gateway type | `Gateway Pro` | `Gateway Pro`, `Wifi Panel` |
 | Port | `65443` | `1`-`65535` |
 | Keepalive | `30` seconds | `10`-`300` seconds |
-| Transition time | `5.0` seconds | `0.5`-`30.0` seconds |
+| Transition time | `1.0` seconds | `0.5`-`30.0` seconds |
 
 Changing options reloads the config entry so the gateway client restarts with the new settings.
+
+`Transition time` is not applied to commands yet; it is exposed to light entities for an upcoming default-fade feature.
 
 ### YAML setup
 
@@ -108,7 +110,7 @@ yeelight_pro:
       pid: 1
       port: 65443
       keepalive: 30
-      transition_time: 5.0
+      transition_time: 1.0
 ```
 
 `pid: 1` is Gateway Pro and `pid: 2` is WiFi Panel.

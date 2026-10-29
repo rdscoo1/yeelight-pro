@@ -342,3 +342,14 @@ async def test_turn_on_raises_when_gateway_does_not_confirm(monkeypatch):
     with pytest.raises(HomeAssistantError):
         await entity.async_turn_on()
     assert entity.is_on is None  # no optimistic state for a failed command
+
+
+def test_default_transition_comes_from_gateway_option():
+    device, conv = make_light_device()
+    device.gateway.transition_time = 2.5
+    assert XLightEntity(device, conv).default_transition == 2.5
+
+
+def test_default_transition_falls_back_to_one_second():
+    device, conv = make_light_device()  # FakeGateway has no transition_time
+    assert XLightEntity(device, conv).default_transition == 1.0

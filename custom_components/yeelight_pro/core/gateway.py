@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Coroutine, Dict, Set, Union, Optional, Any
 
-from .const import PID_WIFI_PANEL, DOMAIN, DEFAULT_PORT
+from .const import PID_WIFI_PANEL, DOMAIN, DEFAULT_PORT, DEFAULT_TRANSITION_TIME
 from .device import XDevice, GatewayDevice, WifiPanelDevice
 from .converters.base import Converter
 
@@ -140,8 +140,9 @@ class ProGateway:
         # Statistics for diagnostics
         self.stats = GatewayStatistics()
 
-        # Configurable transition time (default 5 seconds)
-        self.transition_time: float = options.get('transition_time', 5.0)
+        # Light fade in seconds from the options flow. Exposed to lights as
+        # XLightEntity.default_transition; not applied to commands yet.
+        self.transition_time: float = float(options.get('transition_time', DEFAULT_TRANSITION_TIME))
         
         # Retry settings
         self._default_retries: int = options.get('retries', DEFAULT_RETRIES)

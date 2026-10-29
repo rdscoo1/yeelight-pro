@@ -1428,3 +1428,7 @@ async def test_joined_topology_request_does_not_count_as_a_second_silent_timeout
     await asyncio.gather(gtw.topology(wait_result=True), gtw.topology(wait_result=True))
 
     assert gtw.writer is not None
+
+
+def test_transition_time_defaults_to_one_second():
+    assert ProGateway("1.2.3.4").transition_time == 1.0

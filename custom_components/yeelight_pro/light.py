@@ -22,6 +22,7 @@ from . import (
     Converter,
     async_add_setuper,
 )
+from .core.const import DEFAULT_TRANSITION_TIME
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -109,6 +110,15 @@ class XLightEntity(XEntity, LightEntity):
         lo = getattr(self, "_attr_min_color_temp_kelvin", None)
         hi = getattr(self, "_attr_max_color_temp_kelvin", None)
         return max(lo, min(hi, k)) if lo and hi else k
+
+    @property
+    def default_transition(self) -> float:
+        """Fade in seconds configured for this gateway (options flow `transition_time`).
+
+        Plumbing only: nothing sends it yet. A default-fade feature should use it
+        when a service call carries no ATTR_TRANSITION.
+        """
+        return getattr(self.device.gateway, 'transition_time', DEFAULT_TRANSITION_TIME)
 
     @callback
     def async_set_state(self, data: dict):

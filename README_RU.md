@@ -93,9 +93,11 @@ Yeelight Pro — локальная push-интеграция Home Assistant д�
 | Тип шлюза | `Gateway Pro` | `Gateway Pro`, `Wifi Panel` |
 | Port | `65443` | `1`-`65535` |
 | Keepalive | `30` секунд | `10`-`300` секунд |
-| Transition time | `5.0` секунд | `0.5`-`30.0` секунд |
+| Transition time | `1.0` секунд | `0.5`-`30.0` секунд |
 
 Изменение опций перезагружает config entry, чтобы TCP-клиент шлюза перезапустился с новыми настройками.
+
+`Transition time` пока не применяется к командам; значение передаётся сущностям света для будущей функции плавного перехода по умолчанию.
 
 ### Настройка через YAML
 
@@ -108,7 +110,7 @@ yeelight_pro:
       pid: 1
       port: 65443
       keepalive: 30
-      transition_time: 5.0
+      transition_time: 1.0
 ```
 
 `pid: 1` — Gateway Pro, `pid: 2` — WiFi Panel.
