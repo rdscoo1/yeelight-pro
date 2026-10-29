@@ -108,6 +108,8 @@ class BrightnessConv(PropConv):
             _LOGGER.warning('BrightnessConv.encode: invalid value %r: %s', value, exc)
             v = 0
         dev_v = round(v / 255.0 * float(self.max))
+        if v and not dev_v:
+            dev_v = 1  # 0 reads as "off" (or is rejected); the dimmest real step is 1
         super().encode(device, payload, int(dev_v))
 
 

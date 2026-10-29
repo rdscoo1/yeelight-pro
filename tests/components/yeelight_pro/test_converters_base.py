@@ -278,3 +278,10 @@ def test_sceneconv_has_node():
     assert conv.attr == "scene_123"
     assert conv.domain == "button"
     assert conv.node == node
+
+
+def test_brightness_encode_never_rounds_a_lit_light_to_zero():
+    conv = BrightnessConv("brightness", prop="l", parent="light")
+    payload = {}
+    conv.encode(None, payload, 1)  # HA brightness 1 = 0.4 %
+    assert payload == {"l": 1}
