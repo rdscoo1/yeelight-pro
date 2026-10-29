@@ -1405,3 +1405,26 @@ async def test_any_inbound_message_resets_the_silent_timeout_count():
     await gtw._send_internal("gateway_set.prop", nodes=[])
 
     assert gtw.writer is not None
+
+
+@pytest.mark.asyncio
+async def test_overlapping_silent_requests_count_as_one_silent_window():
+    gtw = ProGateway("1.2.3.4", timeout=0.01)
+    gtw.writer = DummyWriter()
+
+    await asyncio.gather(
+        gtw._send_internal("gateway_set.prop", nodes=[]),
+        gtw._send_internal("gateway_set.prop", nodes=[]),
+    )
+
+    assert gtw.writer is not None
+
+
+@pytest.mark.asyncio
+async def test_joined_topology_request_does_not_count_as_a_second_silent_timeout():
+    gtw = ProGateway("1.2.3.4", timeout=0.01)
+    gtw.writer = DummyWriter()
+
+    await asyncio.gather(gtw.topology(wait_result=True), gtw.topology(wait_result=True))
+
+    assert gtw.writer is not None

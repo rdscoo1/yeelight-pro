@@ -121,6 +121,10 @@ class ProGateway:
         self._json_error_count: int = 0
         # Consecutive requests that timed out with no inbound traffic at all.
         self._silent_timeouts: int = 0
+        # Monotonic time the last counted silent timeout fired; requests sent before
+        # it overlapped that window and must not count again.
+        self._last_silent_at: float = 0.0
+        self._last_rx_mono: float = 0.0
         self._last_topology_devices: Set[Union[str, int]] = set()
         self._was_connected: bool = False
         self._connect_lock = asyncio.Lock()
@@ -372,6 +376,7 @@ class ProGateway:
             self._connected.set()
             self._wakeup.clear()  # a wake for this attempt must not skip the next backoff
             self._silent_timeouts = 0
+            self._last_silent_at = 0.0
 
             self._update_connection_state(True)
             if self._was_connected:
@@ -599,6 +604,7 @@ class ProGateway:
             # Reset error count on successful parse
             self._json_error_count = 0
             self._silent_timeouts = 0
+            self._last_rx_mono = time.monotonic()
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             self._json_error_count += 1
             self.log.error('[%s] JSON decode error (%d/%d): %s; raw=%r', 
@@ -739,7 +745,7 @@ class ProGateway:
                     self._msgs[cid] = fut
                     own_waiter = True
 
-            sent_at = time.time()
+            sent_at = time.monotonic()
             if should_send:
                 dat = {
                     'id': cid,
@@ -783,11 +789,14 @@ class ProGateway:
             self.log.debug('[%s] Timeout waiting for %s', self.host, method)
             if own_waiter and not fut.done():
                 fut.cancel()
-            if self.stats.last_message_time < sent_at:
+            if should_send and self._last_rx_mono < sent_at and sent_at > self._last_silent_at:
                 # Nothing at all came back. A half-open link (gateway lost power or
                 # Wi-Fi) still accepts writes, so without this every command burns
                 # its whole retry budget until the keepalive notices, 35-70 s later.
+                # Requests overlapping one silent window count once, so a burst of
+                # commands during a short hiccup doesn't drop a healthy link.
                 self._silent_timeouts += 1
+                self._last_silent_at = time.monotonic()
                 if self._silent_timeouts >= KEEPALIVE_FAILURE_THRESHOLD and self.writer:
                     self.log.warning('[%s] %d requests in a row got nothing back, reconnecting',
                                      self.host, self._silent_timeouts)
