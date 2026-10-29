@@ -366,6 +366,7 @@ class ProGateway:
 
             self.log.info('[%s] Connected successfully', self.host)
             self._connected.set()
+            self._wakeup.clear()  # a wake for this attempt must not skip the next backoff
 
             self._update_connection_state(True)
             if self._was_connected:
@@ -768,6 +769,10 @@ class ProGateway:
     async def _wait_connected(self) -> bool:
         """Wake run_forever out of its backoff and wait up to `timeout` for a connection."""
         if self._stopping or not self.main_task or self.main_task.done():
+            return False
+        # A send from inside the read loop (on_message) runs in main_task, the only
+        # task that can reconnect: waiting here would just block it for `timeout`.
+        if asyncio.current_task() is self.main_task:
             return False
         self._wakeup.set()
         try:

@@ -1276,3 +1276,19 @@ async def test_connected_event_tracks_the_link():
     await gtw._close_connection()
 
     assert not gtw._connected.is_set()
+
+
+@pytest.mark.asyncio
+async def test_send_from_main_task_does_not_wait_for_its_own_reconnect():
+    """on_message runs inside main_task; a send from there must not wait for a
+    reconnect that only main_task itself can make."""
+    gtw = ProGateway("1.2.3.4", timeout=5)
+    gtw.main_task = asyncio.current_task()
+    gtw.writer = None
+
+    result = await asyncio.wait_for(
+        gtw._send_internal("gateway_get.node", wait_result=False, nodes=[]),
+        0.5,
+    )
+
+    assert result is None
