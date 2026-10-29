@@ -90,12 +90,7 @@ class DummyWriter:
 async def test_send_topology_uses_post_cid_and_writes_json(monkeypatch):
     """Для gateway_get.topology id должен быть 'gateway_post.topology', а не random int."""
     gtw = ProGateway("1.2.3.4")
-
-    async def fake_connect(self):
-        self.writer = DummyWriter()
-        return True
-
-    monkeypatch.setattr(ProGateway, "connect", fake_connect, raising=True)
+    gtw.writer = DummyWriter()
 
     await gtw.send("gateway_get.topology", wait_result=False)
 
@@ -443,30 +438,6 @@ async def test_send_internal_returns_none_when_not_connected(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_send_internal_connects_before_lock(monkeypatch):
-    """When disconnected, _send_internal attempts connect (now outside the lock)
-    and returns None if it fails - without holding _send_lock during connect."""
-    gtw = get_gateway()
-    gtw.writer = None
-
-    connect_called = []
-
-    async def fake_connect(self):
-        connect_called.append(True)
-        # Assert the send lock is NOT held while connecting. Under the old code
-        # (connect ran inside `async with self._send_lock`), this would be True.
-        assert not self._send_lock.locked(), "connect must run outside _send_lock"
-        return False
-
-    monkeypatch.setattr(type(gtw), "connect", fake_connect, raising=True)
-
-    result = await gtw._send_internal("gateway_set.prop", wait_result=True, nodes=[])
-
-    assert result is None
-    assert connect_called, "connect should have been attempted"
-
-
-@pytest.mark.asyncio
 async def test_send_retries_on_failure(monkeypatch):
     """send() должен повторять попытки и возвращать None при исчерпании."""
     gtw = ProGateway("1.2.3.4", retries=2)
@@ -518,15 +489,12 @@ async def test_run_forever_retries_with_exponential_backoff(monkeypatch):
         # сразу прерываем цикл
         raise asyncio.CancelledError()
 
-    async def fake_sleep(delay):
+    async def fake_backoff_sleep(self, delay):
         sleep_calls.append(delay)
 
     monkeypatch.setattr(ProGateway, "connect", fake_connect, raising=True)
     monkeypatch.setattr(ProGateway, "_read_loop", fake_read_loop, raising=True)
-    monkeypatch.setattr(
-        "custom_components.yeelight_pro.core.gateway.asyncio.sleep",
-        fake_sleep,
-    )
+    monkeypatch.setattr(ProGateway, "_backoff_sleep", fake_backoff_sleep, raising=True)
 
     await gtw.run_forever()
 
@@ -574,16 +542,13 @@ async def test_run_forever_waits_before_reconnect_after_disconnect(monkeypatch):
     async def fake_read_loop(self):
         self.writer = None  # emulate disconnected socket
 
-    async def fake_sleep(delay):
+    async def fake_backoff_sleep(self, delay):
         sleep_calls.append(delay)
         gtw._stopping = True
 
     monkeypatch.setattr(ProGateway, "connect", fake_connect, raising=True)
     monkeypatch.setattr(ProGateway, "_read_loop", fake_read_loop, raising=True)
-    monkeypatch.setattr(
-        "custom_components.yeelight_pro.core.gateway.asyncio.sleep",
-        fake_sleep,
-    )
+    monkeypatch.setattr(ProGateway, "_backoff_sleep", fake_backoff_sleep, raising=True)
 
     await gtw.run_forever()
 
@@ -958,15 +923,12 @@ async def test_run_forever_does_not_advance_backoff_if_stopping_during_sleep(mon
     async def fake_read_loop(self):
         self.writer = None  # simulate unclean disconnect
 
-    async def fake_sleep(delay):
+    async def fake_backoff_sleep(self, delay):
         gtw._stopping = True  # stop() called while sleeping
 
     monkeypatch.setattr(ProGateway, "connect", fake_connect, raising=True)
     monkeypatch.setattr(ProGateway, "_read_loop", fake_read_loop, raising=True)
-    monkeypatch.setattr(
-        "custom_components.yeelight_pro.core.gateway.asyncio.sleep",
-        fake_sleep,
-    )
+    monkeypatch.setattr(ProGateway, "_backoff_sleep", fake_backoff_sleep, raising=True)
 
     await gtw.run_forever()
 
@@ -1251,3 +1213,66 @@ async def test_ready_only_waits_for_connection(monkeypatch):
 
     assert await gtw.ready() is True
     assert calls == []
+
+
+# ---------- connection ownership ----------
+
+
+@pytest.mark.asyncio
+async def test_send_while_disconnected_wakes_main_loop_instead_of_connecting(monkeypatch):
+    """A command during reconnect backoff must not wait out the backoff, and must
+    not open a socket the read loop does not know about."""
+    gtw = ProGateway("1.2.3.4", timeout=1)
+    gtw._reconnect_delay = 10.0  # deep in backoff after an outage
+    connects = []
+
+    async def fake_connect(self):
+        connects.append(True)
+        if len(connects) == 1:
+            return False  # still down: run_forever enters its backoff sleep
+        self.writer = DummyWriter()
+        self._connected.set()
+        return True
+
+    async def idle(self):
+        await asyncio.sleep(3600)  # "connected" until cancelled
+
+    monkeypatch.setattr(ProGateway, "connect", fake_connect, raising=True)
+    monkeypatch.setattr(ProGateway, "_read_loop", idle, raising=True)
+    monkeypatch.setattr(ProGateway, "_keepalive_loop", idle, raising=True)
+
+    gtw.main_task = asyncio.create_task(gtw.run_forever())
+    await asyncio.sleep(0)  # first connect failed; loop sleeps 10 s
+
+    await asyncio.wait_for(
+        gtw._send_internal("gateway_set.prop", wait_result=False, nodes=[]),
+        2,  # far less than the 10 s backoff
+    )
+
+    assert len(connects) == 2  # the main loop reconnected, not the sender
+    assert len(gtw.writer.written) == 1
+    await gtw.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_internal_never_opens_its_own_connection(monkeypatch):
+    """Connecting is the main loop's job: only it starts a reader for the socket."""
+    gtw = get_gateway()
+
+    async def fail_connect(self):
+        raise AssertionError("_send_internal must not connect")
+
+    monkeypatch.setattr(type(gtw), "connect", fail_connect, raising=True)
+
+    assert await gtw._send_internal("gateway_set.prop", wait_result=True, nodes=[]) is None
+
+
+@pytest.mark.asyncio
+async def test_connected_event_tracks_the_link():
+    gtw = ProGateway("1.2.3.4")
+    gtw.writer = DummyWriter()
+    gtw._connected.set()
+
+    await gtw._close_connection()
+
+    assert not gtw._connected.is_set()

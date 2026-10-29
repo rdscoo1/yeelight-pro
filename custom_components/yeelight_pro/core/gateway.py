@@ -21,7 +21,7 @@ MSG_SPLIT = b'\r\n'
 
 # Reconnect backoff settings
 MIN_RECONNECT_DELAY = 1.0
-MAX_RECONNECT_DELAY = 60.0
+MAX_RECONNECT_DELAY = 10.0  # LAN gateway: reconnect attempts are cheap, outages are not
 RECONNECT_BACKOFF_FACTOR = 2.0
 
 # Error thresholds
@@ -124,6 +124,10 @@ class ProGateway:
         self._connect_lock = asyncio.Lock()
         self._send_lock = asyncio.Lock()
         self._background_tasks: Set[asyncio.Task] = set()
+        # Set while a connection is up. Senders wait on it; only run_forever connects.
+        self._connected = asyncio.Event()
+        # Set by a sender to cut run_forever's reconnect backoff short.
+        self._wakeup = asyncio.Event()
         
         # Statistics for diagnostics
         self.stats = GatewayStatistics()
@@ -204,27 +208,21 @@ class ProGateway:
         self._reconnect_delay = MIN_RECONNECT_DELAY
         self._json_error_count = 0
         self.stats = GatewayStatistics()  # Reset statistics on start
-        self._cancel_pending_messages(cancel_ready=True)
-        self._msgs['ready'] = asyncio.get_running_loop().create_future()
-        
+        self._cancel_pending_messages()
+
         self.main_task = asyncio.create_task(self.run_forever())
         self.log.info('[%s] Gateway starting', self.host)
         await self.ready()
 
     async def ready(self) -> bool:
-        """Wait for the first connection. _connect requests topology."""
-        if not self.writer:
-            if not (fut := self._msgs.get('ready')):
-                return False
-            try:
-                await asyncio.wait_for(fut, self.timeout)
-            except asyncio.TimeoutError:
-                self.log.warning('[%s] Gateway ready timeout', self.host)
-                return False
-            except asyncio.CancelledError:
-                self.log.debug('[%s] Gateway ready future cancelled', self.host)
-                return False
-
+        """Wait up to `timeout` for the first connection. _connect requests topology."""
+        if self.writer:
+            return True
+        try:
+            await asyncio.wait_for(self._connected.wait(), self.timeout)
+        except asyncio.TimeoutError:
+            self.log.warning('[%s] Gateway ready timeout', self.host)
+            return False
         return True
 
     async def stop(self, *args: Any) -> None:
@@ -251,7 +249,7 @@ class ProGateway:
                 await cancel_verify()
         
         # Cancel all pending futures to avoid leaks
-        self._cancel_pending_messages(cancel_ready=True)
+        self._cancel_pending_messages()
         
         # Cancel main task
         if self.main_task and not self.main_task.done():
@@ -279,7 +277,7 @@ class ProGateway:
                 if not await self.connect():
                     delay = self._reconnect_delay
                     self.log.debug('[%s] Reconnect in %.1f seconds', self.host, delay)
-                    await asyncio.sleep(delay)
+                    await self._backoff_sleep(delay)
                     # Branch 1 backoff: failed to connect at all.
                     self._reconnect_delay = min(
                         self._reconnect_delay * RECONNECT_BACKOFF_FACTOR,
@@ -316,7 +314,7 @@ class ProGateway:
                         self.host,
                         delay,
                     )
-                    await asyncio.sleep(delay)
+                    await self._backoff_sleep(delay)
                     # Re-check after sleep: stop() may have been called during the wait.
                     # Without this guard, the backoff would advance even on clean shutdown.
                     if self._stopping:
@@ -331,6 +329,14 @@ class ProGateway:
             except Exception as exc:
                 self.log.error('[%s] Main loop error: %s', self.host, exc, exc_info=exc)
         self.log.debug('[%s] Main loop stopped', self.host)
+
+    async def _backoff_sleep(self, delay: float) -> None:
+        """Wait `delay` seconds before reconnecting, or less if a sender needs the link now."""
+        try:
+            await asyncio.wait_for(self._wakeup.wait(), delay)
+        except asyncio.TimeoutError:
+            pass
+        self._wakeup.clear()
 
     async def connect(self) -> bool:
         """Establish connection to gateway."""
@@ -359,10 +365,7 @@ class ProGateway:
                 return False
 
             self.log.info('[%s] Connected successfully', self.host)
-
-            if fut := self._msgs.pop('ready', None):
-                if not fut.done():
-                    fut.set_result(True)
+            self._connected.set()
 
             self._update_connection_state(True)
             if self._was_connected:
@@ -544,6 +547,7 @@ class ProGateway:
             writer = self.writer
             self.writer = None
             self.reader = None
+            self._connected.clear()
 
         if writer:
             self.log.debug('[%s] Closing connection', self.host)
@@ -554,7 +558,7 @@ class ProGateway:
                 pass
             self._update_connection_state(False)
 
-        self._cancel_pending_messages(cancel_ready=False)
+        self._cancel_pending_messages()
 
     async def on_message(self, msg: bytes) -> None:
         """Handle incoming message from gateway."""
@@ -672,13 +676,12 @@ class ProGateway:
                     f"pass via the appropriate parameter instead"
                 )
 
-        # Connect outside the send lock: connect() can block up to `timeout`
-        # seconds and must not serialize unrelated senders behind it.
-        # connect() is internally guarded by _connect_lock.
-        if not self.writer:
-            if not await self.connect():
-                self.log.warning('[%s] Cannot send %s: not connected', self.host, method)
-                return None
+        # Only run_forever opens connections: it is the one place that starts a
+        # read loop, so a socket opened here would have nobody reading its replies
+        # (the gateway would act on the command while we time out and resend it).
+        if not self.writer and not await self._wait_connected():
+            self.log.warning('[%s] Cannot send %s: not connected', self.host, method)
+            return None
 
         async with self._send_lock:
             if not self.writer:
@@ -761,6 +764,17 @@ class ProGateway:
                 self._msgs.pop(cid, None)
 
         return result
+
+    async def _wait_connected(self) -> bool:
+        """Wake run_forever out of its backoff and wait up to `timeout` for a connection."""
+        if self._stopping or not self.main_task or self.main_task.done():
+            return False
+        self._wakeup.set()
+        try:
+            await asyncio.wait_for(self._connected.wait(), self.timeout)
+        except asyncio.TimeoutError:
+            return False
+        return self.writer is not None
 
     async def topology(self, wait_result: bool = False) -> Optional[Dict]:
         """Request topology from gateway."""
@@ -881,11 +895,9 @@ class ProGateway:
             return not is_closing()
         return True
 
-    def _cancel_pending_messages(self, cancel_ready: bool) -> None:
-        """Cancel pending command futures and optionally ready future."""
+    def _cancel_pending_messages(self) -> None:
+        """Cancel every pending command future."""
         for cid, fut in list(self._msgs.items()):
-            if cid == 'ready' and not cancel_ready:
-                continue
             if not fut.done():
                 fut.cancel()
             self._msgs.pop(cid, None)
