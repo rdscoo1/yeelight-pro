@@ -1324,3 +1324,56 @@ async def test_retry_is_dropped_once_a_newer_command_targets_the_same_node(monke
     assert await on is None
     assert wire == ["ON", "OFF"]
     assert gtw.stats.commands_failed == 0  # superseded is not failed
+
+
+def _lossy_first_ack(wire):
+    """Fake _send_internal recording each node's set; the first ack is lost."""
+    first = [True]
+
+    async def fake_send_internal(method, wait_result=True, **kwargs):
+        wire.append(kwargs["nodes"][0]["set"])
+        if first[0]:
+            first[0] = False
+            await asyncio.sleep(0.05)
+            return None
+        return {"ok": True}
+
+    return fake_send_internal
+
+
+@pytest.mark.asyncio
+async def test_retry_survives_a_newer_command_on_another_channel(monkeypatch):
+    """Channel 2 on a multi-channel switch must not drop channel 1's retry."""
+    gtw = ProGateway("1.2.3.4")
+    wire = []
+    monkeypatch.setattr(gtw, "_send_internal", _lossy_first_ack(wire))
+    monkeypatch.setattr("custom_components.yeelight_pro.core.gateway.RETRY_DELAY_BASE", 0.01)
+
+    ch1 = asyncio.create_task(
+        gtw.send("gateway_set.prop", nodes=[{"id": 7, "nt": 2, "set": {"1-p": True}}])
+    )
+    await asyncio.sleep(0.01)
+    await gtw.send("gateway_set.prop", nodes=[{"id": 7, "nt": 2, "set": {"2-p": True}}])
+
+    assert await ch1
+    assert wire == [{"1-p": True}, {"2-p": True}, {"1-p": True}]
+
+
+@pytest.mark.asyncio
+async def test_retry_keeps_only_keys_not_superseded(monkeypatch):
+    """Colour change then power change: the retry resends the colour only."""
+    gtw = ProGateway("1.2.3.4")
+    wire = []
+    monkeypatch.setattr(gtw, "_send_internal", _lossy_first_ack(wire))
+    monkeypatch.setattr("custom_components.yeelight_pro.core.gateway.RETRY_DELAY_BASE", 0.01)
+
+    first_set = {"p": True, "c": 255}
+    first = asyncio.create_task(
+        gtw.send("gateway_set.prop", nodes=[{"id": 7, "nt": 2, "set": first_set}])
+    )
+    await asyncio.sleep(0.01)
+    await gtw.send("gateway_set.prop", nodes=[{"id": 7, "nt": 2, "set": {"p": False}}])
+
+    assert await first
+    assert wire == [{"p": True, "c": 255}, {"p": False}, {"c": 255}]
+    assert first_set == {"p": True, "c": 255}  # caller's dict untouched

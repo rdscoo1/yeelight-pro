@@ -461,21 +461,34 @@ class ProGateway:
         # Fire-and-forget: a None return from _send_internal is normal - don't
         # treat it as failure and don't retry.
         wait_result = kwargs.get('wait_result', True)
-        # A retry must never land after a newer state command for the same node:
+        # A retry must never land after a newer command for the same key on the same node:
         # ON (ack lost) -> OFF -> ON-retry leaves the light on against the user.
         token = object()
-        targets = [
-            n['id'] for n in kwargs.get('nodes') or ()
-            if isinstance(n, dict) and 'set' in n and 'id' in n
-        ]
-        for nid in targets:
-            self._latest_set[nid] = token
+
+        def sets(n: Any) -> bool:
+            return isinstance(n, dict) and 'id' in n and isinstance(n.get('set'), dict)
+
+        targets = [(n['id'], k) for n in kwargs.get('nodes') or () if sets(n) for k in n['set']]
+        for target in targets:
+            self._latest_set[target] = token
 
         for attempt in range(retries):
-            if attempt and any(self._latest_set.get(nid) is not token for nid in targets):
-                self.log.debug('[%s] Dropping retry of %s: superseded by a newer command',
-                               self.host, method)
-                return None
+            if attempt and targets:
+                # Resend only the keys no newer command has taken over (copies, not the caller's dicts).
+                nodes = []
+                for n in kwargs['nodes']:
+                    if sets(n):
+                        kept = {k: v for k, v in n['set'].items()
+                                if self._latest_set.get((n['id'], k)) is token}
+                        if not kept:
+                            continue
+                        n = {**n, 'set': kept}
+                    nodes.append(n)
+                if not any(sets(n) for n in nodes):
+                    self.log.debug('[%s] Dropping retry of %s: superseded by a newer command',
+                                   self.host, method)
+                    return None
+                kwargs['nodes'] = nodes
             try:
                 result = await self._send_internal(method, **kwargs)
                 if result is not None:
