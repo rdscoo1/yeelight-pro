@@ -624,32 +624,44 @@ class XDevice:
             **kwargs,
         }
         
+        expected = None
         if expected_params:
+            # Keys an earlier command set that no echo has confirmed yet. On a
+            # multi-gang panel every channel is its own command, so replacing the
+            # expectation would drop verification for all channels but the last.
+            unconfirmed = (self._expected_state or {}).get('params') or {}
             # Supersede any pending verification BEFORE this command goes out.
             # Cancelling afterwards left a window the length of the send (longer
             # with retry backoff) in which an older correction could still fire and
             # land after the new command - the light would then obey the previous
             # intent, which reads as "I pressed the switch and it did the opposite".
             await self.async_cancel_verify_task()
+            if verify:
+                expected = {**unconfirmed, **expected_params}
+                # Registered before sending: a concurrent command for another key
+                # merges it, and an echo that beats the ack can confirm it.
+                self._expected_state = {'params': expected, 'timestamp': time.time()}
+        # This command owns verification until a newer one (or a confirming echo)
+        # bumps the epoch.
+        epoch = self._verify_epoch
 
         sent_at = time.monotonic()
         result = await self.gateway.send(cmd, nodes=[node])
-        
-        # Schedule passive verification if enabled and something was set
-        if verify and result and expected_params:
-            self._expected_state = {
-                'params': expected_params,
-                'timestamp': time.time(),
-            }
-            epoch = self._verify_epoch
-            self._schedule_verify(
-                self._verify_state_later(
-                    expected_params, cmd, node, epoch=epoch, sent_at=sent_at,
-                ),
-                epoch,
-            )
-            _LOGGER.debug('[%s] Scheduled passive verification for %s', self.id, expected_params)
-        
+
+        if self._verify_epoch != epoch or not expected:
+            # Superseded or already confirmed while in flight: scheduling now would
+            # let an older command's check resend it over the newer intent.
+            return result
+        if not result:
+            self._expected_state = None
+            return result
+
+        retry_node = {**node, 'set': expected}
+        self._schedule_verify(
+            self._verify_state_later(expected, cmd, retry_node, epoch=epoch, sent_at=sent_at),
+            epoch,
+        )
+        _LOGGER.debug('[%s] Scheduled passive verification for %s', self.id, expected)
         return result
 
 

@@ -1233,3 +1233,92 @@ async def test_prop_changed_merges_partial_params():
     await dev.prop_changed({"params": {"p": False}})
 
     assert dev.prop_params == {"p": False, "ct": 4000, "l": 80}
+
+
+# ---------- verification ownership ----------
+
+
+@pytest.mark.asyncio
+async def test_slow_older_command_does_not_take_over_verification():
+    """ON's ack arrives after OFF was sent: ON must not schedule a check that would
+    later 'correct' the light back on."""
+    dev = _make_light_device()
+
+    class AckGateway(FakeGateway):
+        def __init__(self):
+            super().__init__()
+            self.acks = {}
+
+        async def send(self, method, params=None, wait_result=True, **kwargs):
+            p = kwargs["nodes"][0]["set"]["p"]
+            self.acks[p] = asyncio.get_running_loop().create_future()
+            return await self.acks[p]
+
+    gw = AckGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    on = asyncio.create_task(dev.set_prop(set={"p": True}))
+    await asyncio.sleep(0)
+    off = asyncio.create_task(dev.set_prop(set={"p": False}))
+    await asyncio.sleep(0)
+
+    gw.acks[False].set_result({"ok": True})
+    await off
+    gw.acks[True].set_result({"ok": True})  # the late ON ack
+    await on
+
+    assert dev._expected_state["params"] == {"p": False}
+    await dev.async_cancel_verify_task()
+
+
+@pytest.mark.asyncio
+async def test_superseded_retry_success_does_not_verify_older_intent():
+    """Older {p:True, c:255} loses its ack; a newer {p:False} goes out; the
+    gateway's superseded retry resends only {c:255} and succeeds AFTER the newer
+    send. The older set_prop's truthy result must not schedule a check of p:True."""
+    dev = _make_light_device()
+
+    class AckGateway(FakeGateway):
+        def __init__(self):
+            super().__init__()
+            self.acks = {}
+
+        async def send(self, method, params=None, wait_result=True, **kwargs):
+            p = kwargs["nodes"][0]["set"]["p"]
+            self.acks[p] = asyncio.get_running_loop().create_future()
+            return await self.acks[p]
+
+    gw = AckGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    old = asyncio.create_task(dev.set_prop(set={"p": True, "c": 255}))
+    await asyncio.sleep(0)
+    new = asyncio.create_task(dev.set_prop(set={"p": False}))
+    await asyncio.sleep(0)
+
+    gw.acks[False].set_result({"ok": True})
+    await new
+    gw.acks[True].set_result({"ok": True})  # retry of the leftover {c:255}
+    await old
+
+    params = dev._expected_state["params"]
+    assert params["p"] is False
+    # c:255 was really sent (by the stripped retry), so it may stay verified.
+    assert params == {"p": False, "c": 255}
+    await dev.async_cancel_verify_task()
+
+
+@pytest.mark.asyncio
+async def test_commands_on_one_device_are_all_verified():
+    """'All off' on a 2-gang panel: both channels must stay under verification."""
+    dev = make_xdevice()
+    gw = FakeGateway()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    await asyncio.gather(
+        dev.set_prop(set={"1-sp": False}),
+        dev.set_prop(set={"2-sp": False}),
+    )
+
+    assert dev._expected_state["params"] == {"1-sp": False, "2-sp": False}
+    await dev.async_cancel_verify_task()
