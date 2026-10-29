@@ -746,6 +746,13 @@ class ProGateway:
                 fut.cancel()
             return None
         except asyncio.CancelledError:
+            # Two different things land here. If _close_connection cancelled our
+            # waiter, the reply is lost and the caller may retry. If the caller
+            # itself is being cancelled, swallowing it makes _send_with_retry
+            # resend a command nobody wants any more.
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise
             return None
         finally:
             if own_waiter:

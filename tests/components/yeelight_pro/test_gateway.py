@@ -1164,3 +1164,41 @@ async def test_message_ids_are_monotonic():
     assert len(set(ids)) == 3
     assert ids[1] == ids[0] + 1
     assert ids[2] == ids[1] + 1
+
+
+# ---------- cancellation vs. lost reply ----------
+
+
+@pytest.mark.asyncio
+async def test_cancelled_send_is_not_retried():
+    """Cancelling the caller must cancel the send, not look like a timeout.
+
+    _send_internal used to turn CancelledError into None, so _send_with_retry
+    resent the command and the cancel only landed after the whole retry chain.
+    """
+    gtw = ProGateway("1.2.3.4", timeout=5)
+    gtw.writer = DummyWriter()
+
+    task = asyncio.create_task(
+        gtw.send("gateway_set.prop", nodes=[{"id": 1, "nt": 2, "set": {"p": True}}])
+    )
+    await asyncio.sleep(0)  # written; now waiting for the ack
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(gtw.writer.written) == 1
+    assert gtw._msgs == {}
+
+
+@pytest.mark.asyncio
+async def test_send_returns_none_when_connection_drops_mid_wait():
+    """A waiter cancelled by _close_connection is a lost reply, not a cancelled caller."""
+    gtw = ProGateway("1.2.3.4", timeout=5)
+    gtw.writer = DummyWriter()
+
+    task = asyncio.create_task(gtw._send_internal("gateway_set.prop", nodes=[]))
+    await asyncio.sleep(0)
+    await gtw._close_connection()
+
+    assert await task is None
