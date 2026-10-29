@@ -91,6 +91,7 @@ async def test_topology_registers_entities_through_platform_setup_callbacks(hass
 
 async def test_topology_removal_marks_existing_entities_unavailable(hass):
     gateway, added = _gateway_with_platform_setups(hass)
+    gateway.writer = object()  # the TCP link is up
 
     await gateway.on_message(
         json.dumps(
@@ -123,3 +124,31 @@ async def test_topology_removal_marks_existing_entities_unavailable(hass):
 
     assert gateway.devices[100].prop["o"] is False
     assert light.available is False
+
+
+async def test_device_entities_go_unavailable_while_gateway_is_disconnected(hass):
+    gateway, added = _gateway_with_platform_setups(hass)
+    gateway.writer = object()  # the TCP link is up
+
+    await gateway.on_message(
+        json.dumps(
+            {
+                "method": "gateway_post.topology",
+                "nodes": [
+                    {"id": 0, "nt": NodeType.GATEWAY},
+                    {"id": 100, "nt": NodeType.MESH, "type": DeviceType.LIGHT, "n": "Desk Lamp"},
+                ],
+            }
+        ).encode()
+    )
+    light = next(entity for entity in added["light"] if isinstance(entity, XLightEntity))
+    assert light.available is True
+
+    writes = []
+    light.added = True
+    light.async_write_ha_state = lambda: writes.append(light.available)
+
+    gateway.writer = None  # link down
+    gateway._update_connection_state(False)
+
+    assert writes == [False]

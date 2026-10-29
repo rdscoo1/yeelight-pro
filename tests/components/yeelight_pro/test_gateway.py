@@ -357,6 +357,7 @@ async def test_stop_cancels_task_closes_writer_and_clears_devices():
     class DummyDevice:
         def __init__(self):
             self.gateways = [gtw]
+            self.entities = {}
 
     dev = DummyDevice()
     gtw.devices = {1: dev}

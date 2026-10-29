@@ -901,9 +901,19 @@ class ProGateway:
         }
 
     def _update_connection_state(self, connected: bool) -> None:
-        """Update gateway device connection state."""
+        """Update the gateway device and re-publish every device entity.
+
+        Device entities derive `available` from is_connected, so a state write
+        is all they need to pick up the change.
+        """
         if self.device:
             self.device.update({'connection': connected, 'available': connected})
+        for dvc in self.devices.values():
+            if dvc is self.device:
+                continue
+            for entity in dvc.entities.values():
+                if entity.added:
+                    entity.async_write_ha_state()
 
     def _send_reconnect_notification(self) -> None:
         """Send persistent notification on reconnect."""
