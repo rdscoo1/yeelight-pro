@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-29
+
 ### Fixed
 - Requested topology on every connect, not only on reconnects. If the gateway was unreachable when Home Assistant started, `ready()` gave up after `timeout` and the later first connect never asked for topology, leaving a connected gateway with no devices until a manual reload
 - Stopped commands from opening the TCP connection themselves. Only the main loop starts a reader, so a socket opened by a command had nobody reading its replies: the gateway executed the command while Home Assistant timed out, resent it, and reported failure. Commands now wake the main loop out of its backoff (capped at 10 s instead of 60 s); a send from inside the read loop no longer waits on its own reconnect

@@ -8,7 +8,7 @@
 
 Yeelight Pro is a local-push Home Assistant integration for Yeelight Pro gateways and WiFi panels. It connects to the device over the local TCP API, discovers the gateway topology, creates Home Assistant entities for supported devices, and keeps entity state updated from gateway push messages.
 
-Current integration version: **1.3.5**.
+Current integration version: **1.5.0**.
 
 ## Highlights
 
