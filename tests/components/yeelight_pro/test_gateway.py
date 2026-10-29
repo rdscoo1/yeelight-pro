@@ -38,7 +38,7 @@ def get_gateway(host=None):
     return GatewayForTests(host, hass=Hass())
 
 
-def test_reconnect_notification_id_includes_reconnect_count(monkeypatch):
+def test_reconnect_notification_reuses_one_id_per_gateway(monkeypatch):
     gtw = get_gateway("1.2.3.4")
     notifications = []
 
@@ -55,12 +55,11 @@ def test_reconnect_notification_id_includes_reconnect_count(monkeypatch):
     gtw.stats.reconnect_count = 2
     gtw._send_reconnect_notification()
 
-    assert [
-        kwargs["notification_id"] for _, kwargs in notifications
-    ] == [
-        "yeelight_pro-reconnect-1.2.3.4-1",
-        "yeelight_pro-reconnect-1.2.3.4-2",
+    assert [kwargs["notification_id"] for _, kwargs in notifications] == [
+        "yeelight_pro-reconnect-1.2.3.4",
+        "yeelight_pro-reconnect-1.2.3.4",
     ]
+    assert "#2" in notifications[-1][0][1]  # the message carries the count
 
 
 class DummyWriter:

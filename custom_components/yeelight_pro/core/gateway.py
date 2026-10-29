@@ -923,9 +923,12 @@ class ProGateway:
             from homeassistant.components import persistent_notification
             persistent_notification.async_create(
                 self.hass,
-                f"Gateway {self.host} reconnected (attempt #{self.stats.reconnect_count})",
+                f"Gateway {self.host} reconnected at {time.strftime('%H:%M:%S')} "
+                f"(reconnect #{self.stats.reconnect_count} since start)",
                 title="Yeelight Pro Reconnected",
-                notification_id=f"{DOMAIN}-reconnect-{self.host}-{self.stats.reconnect_count}",
+                # One per gateway: re-creating it re-shows it after a dismiss, so
+                # repeated reconnects stay visible without piling up.
+                notification_id=f"{DOMAIN}-reconnect-{self.host}",
             )
         except Exception as exc:
             self.log.debug('[%s] Failed to send reconnect notification: %s', self.host, exc)
