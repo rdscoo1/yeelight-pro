@@ -1202,3 +1202,52 @@ async def test_send_returns_none_when_connection_drops_mid_wait():
     await gtw._close_connection()
 
     assert await task is None
+
+
+# ---------- topology on every connect ----------
+
+
+@pytest.mark.asyncio
+async def test_first_connect_after_failed_start_requests_topology(monkeypatch):
+    """Gateway offline when HA starts: the late first connect must still fetch topology.
+
+    ready() used to be the only startup topology request and it gives up after
+    `timeout`. The main loop then connected without asking, leaving a connected
+    gateway with zero devices until a manual reload.
+    """
+    gtw = ProGateway("1.2.3.4")
+    requested = []
+
+    async def fake_topology(self, wait_result=False):
+        requested.append(wait_result)
+
+    async def fake_open_connection(host, port):
+        return object(), DummyWriter()
+
+    monkeypatch.setattr(ProGateway, "topology", fake_topology)
+    monkeypatch.setattr(
+        "custom_components.yeelight_pro.core.gateway.asyncio.open_connection",
+        fake_open_connection,
+    )
+
+    assert await gtw.connect() is True
+    await asyncio.sleep(0)  # let the background reconcile task run
+
+    assert requested == [True]
+    assert gtw.stats.reconnect_count == 0  # a first connect is not a reconnect
+
+
+@pytest.mark.asyncio
+async def test_ready_only_waits_for_connection(monkeypatch):
+    """Topology now comes from every connect; ready() must not ask a second time."""
+    gtw = ProGateway("1.2.3.4")
+    calls = []
+
+    async def fake_topology(self, wait_result=False):
+        calls.append(wait_result)
+
+    monkeypatch.setattr(ProGateway, "topology", fake_topology)
+    gtw.writer = DummyWriter()  # already connected
+
+    assert await gtw.ready() is True
+    assert calls == []

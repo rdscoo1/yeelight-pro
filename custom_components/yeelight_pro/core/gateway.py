@@ -212,7 +212,7 @@ class ProGateway:
         await self.ready()
 
     async def ready(self) -> bool:
-        """Wait for gateway to be ready and request topology."""
+        """Wait for the first connection. _connect requests topology."""
         if not self.writer:
             if not (fut := self._msgs.get('ready')):
                 return False
@@ -225,7 +225,6 @@ class ProGateway:
                 self.log.debug('[%s] Gateway ready future cancelled', self.host)
                 return False
 
-        await self.topology()
         return True
 
     async def stop(self, *args: Any) -> None:
@@ -369,8 +368,11 @@ class ProGateway:
             if self._was_connected:
                 self.stats.reconnect_count += 1
                 self._send_reconnect_notification()
-                self._track_background_task(self._create_task(self._reconcile_state()))
             self._was_connected = True
+            # Every connect needs topology: the first creates the devices (and can
+            # come long after start() stopped waiting for it), later ones resync
+            # state that changed while the link was down.
+            self._track_background_task(self._create_task(self._reconcile_state()))
         return True
 
     async def check_available(self) -> Optional[Exception]:
@@ -435,12 +437,12 @@ class ProGateway:
                 break
     
     async def _reconcile_state(self) -> None:
-        """Reconcile device states after reconnection.
+        """Fetch topology after every (re)connect.
 
-        Requests fresh topology which triggers prop_changed → update → async_write_ha_state
-        for all devices automatically.
+        The gateway answers with gateway_post.topology followed by a full
+        gateway_post.prop dump, which refreshes every device's state.
         """
-        self.log.info('[%s] Reconciling device states after reconnect', self.host)
+        self.log.info('[%s] Requesting topology after connect', self.host)
         try:
             await self.topology(wait_result=True)
             self.log.info('[%s] State reconciliation complete, %d devices', self.host, len(self.devices))
