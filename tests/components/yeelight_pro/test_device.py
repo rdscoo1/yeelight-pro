@@ -844,8 +844,8 @@ async def test_verify_state_later_retries_on_ct_mismatch(monkeypatch):
     method, _params, _wait, kwargs = gw.sent[0]
     assert method == "gateway_set.prop"
     retried_node = kwargs.get("nodes")[0]
-    assert retried_node["set"] == {"p": True, "ct": 4000}, (
-        "retried node must carry the full set payload, not just power"
+    assert retried_node["set"] == {"ct": 4000}, (
+        "retry must resend the mismatched ct, and only what is still wrong"
     )
 
 
@@ -1425,3 +1425,54 @@ async def test_silent_device_confirmed_by_read_back_is_not_resent(monkeypatch):
     assert len(gw.sent) == 1
     assert dev._expected_state is None
     assert dev._verify_task is None
+
+
+# ---------- per-channel echoes on multi-gang panels ----------
+
+
+@pytest.mark.asyncio
+async def test_separate_channel_echoes_resolve_verification():
+    """'All off' on a 3-gang panel: each channel echoes on its own, and the
+    verification must end once every channel has confirmed."""
+    dev = make_xdevice()
+    dev.prop["params"] = {"1-p": True, "2-p": True, "3-p": True}
+    dev.gateways.append(FakeGateway())  # type: ignore[arg-type]
+
+    for i in (1, 2, 3):
+        await dev.set_prop(set={f"{i}-p": False})
+    task = dev._verify_task
+    assert task is not None
+
+    for i in (1, 2, 3):
+        await dev.prop_changed({"id": 1, "params": {f"{i}-p": False}})
+    await asyncio.sleep(0)
+
+    assert dev._expected_state is None
+    assert dev._verify_task is None
+    assert task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_verification_never_undoes_a_later_physical_press(monkeypatch):
+    """Channels 1 and 2 confirm OFF, then someone turns channel 1 back on at the
+    wall. Verification must leave channel 1 alone and only chase channel 3."""
+    from custom_components.yeelight_pro.core import device as device_module
+    from custom_components.yeelight_pro.core.gateway import GatewayStatistics
+
+    monkeypatch.setattr(device_module, "STATE_VERIFY_TIMEOUT", 0.01)
+    dev = make_xdevice()
+    dev.prop["params"] = {"1-p": True, "2-p": True, "3-p": True}
+    gw = FakeGateway()
+    gw.stats = GatewayStatistics()
+    dev.gateways.append(gw)  # type: ignore[arg-type]
+
+    for i in (1, 2, 3):
+        await dev.set_prop(set={f"{i}-p": False})
+    await dev.prop_changed({"id": 1, "params": {"1-p": False}})
+    await dev.prop_changed({"id": 1, "params": {"2-p": False}})
+    await dev.prop_changed({"id": 1, "params": {"1-p": True}})  # physical press
+    await asyncio.sleep(0.2)
+
+    resent = [kw["nodes"][0]["set"] for _m, _p, _w, kw in gw.sent[3:]]
+    assert resent and all(s == {"3-p": False} for s in resent)
+    await dev.async_cancel_verify_task()

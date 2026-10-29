@@ -239,13 +239,16 @@ class XDevice:
         
         # Check if this update matches expected state from passive verification
         if self._expected_state:
-            expected = self._expected_state.get('params') or {}
             actual = data.get('params') or {}
-            # Cancel only when every expected key arrived and matches;
-            # partial echoes are resolved by the timeout path against
-            # the merged self.prop_params.
-            if expected and all(k in actual and actual[k] == v for k, v in expected.items()):
-                _LOGGER.debug('[%s] State verified via gateway_post.prop: %s', self.id, expected)
+            # Drop every key this echo confirms. A multi-gang panel echoes each
+            # channel separately, and a confirmed key that later changes (a press
+            # at the wall) is a new intent, not something to correct.
+            remaining = self._expected_state['params'] = {
+                k: v for k, v in (self._expected_state.get('params') or {}).items()
+                if k not in actual or actual[k] != v
+            }
+            if not remaining:
+                _LOGGER.debug('[%s] State verified via gateway_post.prop', self.id)
                 await self.async_cancel_verify_task()
 
     async def event_fired(self, data: dict):
@@ -519,6 +522,9 @@ class XDevice:
                 self._verify_task = None
                 return
 
+            # Only the keys no echo has confirmed yet; `expected` as scheduled may
+            # include channels that confirmed and have changed since.
+            expected = self._expected_state['params']
             params = self.prop_params
             # Keys the device never echoes in gateway_post.prop are unverifiable
             # and skipped: this retry is only a best-effort net. The real fix for a
@@ -547,21 +553,10 @@ class XDevice:
                 return
 
             if attempt < STATE_VERIFY_RETRIES:
-                # Re-check right before acting. A newer command may have superseded
-                # this expectation, or a late echo may have caught the state up since
-                # the deadline above - resending in either case pushes a stale command
-                # at a light whose state is already what somebody wanted.
-                current_expected = self._expected_state.get('params') if self._expected_state else None
-                if current_expected != expected:
-                    _LOGGER.debug(
-                        '[%s] Verify task for %s is stale (current expected %s), aborting',
-                        self.id, expected, current_expected,
-                    )
-                    return
-
-                # Give the read loop one chance to deliver an echo that is already
-                # on the wire but not yet dispatched: our timer and the socket
-                # reader wake in the same batch and the order between them is
+                # A newer command bumps the epoch, which the checks around this
+                # yield catch. Give the read loop one chance to deliver an echo that
+                # is already on the wire but not yet dispatched: our timer and the
+                # socket reader wake in the same batch and the order between them is
                 # arbitrary. Without this yield a command the gateway did confirm
                 # can still be resent.
                 await asyncio.sleep(0)
@@ -572,10 +567,12 @@ class XDevice:
                     )
                     return
 
+                # A late echo may have caught the state up (and pruned the key).
                 fresh = self.prop_params
-                still_wrong = {
-                    k: fresh[k] for k in mismatched if k in fresh and fresh[k] != expected[k]
-                }
+                expected = self._expected_state['params']
+                still_wrong = [
+                    k for k in mismatched if k in expected and k in fresh and fresh[k] != expected[k]
+                ]
                 if not still_wrong:
                     _LOGGER.debug(
                         '[%s] State caught up before correction, skipping resend: %s',
@@ -595,7 +592,10 @@ class XDevice:
 
                 if self.gateway:
                     resent_at = time.monotonic()
-                    result = await self.gateway.send(retry_cmd, nodes=[retry_node])
+                    result = await self.gateway.send(
+                        retry_cmd,
+                        nodes=[{**retry_node, 'set': {k: expected[k] for k in still_wrong}}],
+                    )
                     if result:
                         self.gateway.stats.state_corrections += 1
                         _LOGGER.info('[%s] State correction command sent', self.id)
